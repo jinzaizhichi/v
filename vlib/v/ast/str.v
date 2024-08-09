@@ -302,7 +302,7 @@ fn shorten_full_name_based_on_aliases(input string, m2a map[string]string) strin
 	if replacements.len == 0 {
 		return input
 	}
-	//
+
 	mut res := input
 	if replacements.len > 1 {
 		replacements.sort(a.weight > b.weight)
@@ -498,6 +498,12 @@ pub fn (x Expr) str() string {
 			return 'spawn ${x.call_expr}'
 		}
 		Ident {
+			if obj := x.scope.find('${x.mod}.${x.name}') {
+				if obj is ConstField && x.mod != 'main' {
+					last_mod := x.mod.all_after_last('.')
+					return '${last_mod}.${x.name}'
+				}
+			}
 			return x.name.clone()
 		}
 		IfExpr {

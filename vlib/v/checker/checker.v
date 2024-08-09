@@ -42,10 +42,10 @@ pub const vroot_is_deprecated_message = '@VROOT is deprecated, use @VMODROOT or 
 pub struct Checker {
 pub mut:
 	pref &pref.Preferences = unsafe { nil } // Preferences shared from V struct
-	//
+
 	table &ast.Table = unsafe { nil }
 	file  &ast.File  = unsafe { nil }
-	//
+
 	nr_errors     int
 	nr_warnings   int
 	nr_notices    int
@@ -57,11 +57,11 @@ pub mut:
 	notice_lines  map[string]bool // dedup notices
 	error_details []string
 	should_abort  bool // when too many errors/warnings/notices are accumulated, .should_abort becomes true. It is checked in statement/expression loops, so the checker can return early, instead of wasting time.
-	//
+
 	expected_type              ast.Type
-	expected_or_type           ast.Type        // fn() or { 'this type' } eg. string. expected or block type
-	expected_expr_type         ast.Type        // if/match is_expr: expected_type
-	mod                        string          // current module name
+	expected_or_type           ast.Type // fn() or { 'this type' } eg. string. expected or block type
+	expected_expr_type         ast.Type // if/match is_expr: expected_type
+	mod                        string   // current module name
 	const_var                  &ast.ConstField = unsafe { nil } // the current constant, when checking const declarations
 	const_deps                 []string
 	const_names                []string
@@ -128,14 +128,14 @@ mut:
 	// doing_line_info                  int    // a quick single file run when called with v -line-info (contains line nr to inspect)
 	// doing_line_path                  string // same, but stores the path being parsed
 	is_index_assign   bool
-	comptime_call_pos int // needed for correctly checking use before decl for templates
+	comptime_call_pos int                      // needed for correctly checking use before decl for templates
 	goto_labels       map[string]ast.GotoLabel // to check for unused goto labels
 	enum_data_type    ast.Type
 	field_data_type   ast.Type
 	variant_data_type ast.Type
 	fn_return_type    ast.Type
 	orm_table_fields  map[string][]ast.StructField // known table structs
-	//
+
 	v_current_commit_hash string // same as old C.V_CURRENT_COMMIT_HASH
 	assign_stmt_attr      string // for `x := [1,2,3] @[freed]`
 }
@@ -561,6 +561,12 @@ fn (mut c Checker) alias_type_decl(node ast.AliasTypeDecl) {
 						c.error('unknown type `${ct_sym.name}`', node.type_pos)
 					}
 				}
+
+				if parent_typ_sym.info.is_generic && parent_typ_sym.info.concrete_types.len == 0 {
+					c.error('${parent_typ_sym.name} type is generic struct, must specify the generic type names, e.g. ${parent_typ_sym.name}[int]',
+						node.type_pos)
+				}
+
 				// check if embed types are struct
 				for embed_type in parent_typ_sym.info.embeds {
 					final_embed_sym := c.table.final_sym(embed_type)
@@ -3540,7 +3546,11 @@ fn (mut c Checker) at_expr(mut node ast.AtExpr) ast.Type {
 			if c.table.cur_fn == unsafe { nil } {
 				return ast.void_type
 			}
-			node.val = c.table.cur_fn.name.all_after_last('.')
+			if _ := c.table.cur_fn.name.index('__static__') {
+				node.val = c.table.cur_fn.name.all_after_last('__static__')
+			} else {
+				node.val = c.table.cur_fn.name.all_after_last('.')
+			}
 		}
 		.method_name {
 			if c.table.cur_fn == unsafe { nil } {
@@ -3550,6 +3560,8 @@ fn (mut c Checker) at_expr(mut node ast.AtExpr) ast.Type {
 			if c.table.cur_fn.is_method {
 				node.val = c.table.type_to_str(c.table.cur_fn.receiver.typ).all_after_last('.') +
 					'.' + fname
+			} else if _ := fname.index('__static__') {
+				node.val = fname.all_before('__static__') + '.' + fname.all_after('__static__')
 			} else {
 				node.val = fname
 			}

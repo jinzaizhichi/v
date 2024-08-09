@@ -295,7 +295,7 @@ pub mut:
 	prog_len int // regex program len
 	// char classes storage
 	cc       []CharClass // char class list
-	cc_index int // index
+	cc_index int         // index
 	// groups
 	group_count      int   // number of groups in this regex struct
 	groups           []int // groups index results
@@ -314,7 +314,7 @@ pub mut:
 	// flags
 	flag int // flag for optional parameters
 	// Debug/log
-	debug    int    // enable in order to have the unroll of the code 0 = NO_DEBUG, 1 = LIGHT 2 = VERBOSE
+	debug    int // enable in order to have the unroll of the code 0 = NO_DEBUG, 1 = LIGHT 2 = VERBOSE
 	log_func FnLog = simple_log // log function, can be customized by the user
 	query    string // query string
 }
@@ -375,7 +375,7 @@ fn (mut re RE) reset_src() {
 *
 ******************************************************************************/
 struct BslsStruct {
-	ch        rune        // meta char
+	ch        rune // meta char
 	validator FnValidator = unsafe { nil } // validator function pointer
 }
 
@@ -525,9 +525,9 @@ const cc_end = 4
 
 struct CharClass {
 mut:
-	cc_type   int         // type of cc token
-	ch0       rune        // first char of the interval a-b  a in this case
-	ch1       rune        // second char of the interval a-b b in this case
+	cc_type   int  // type of cc token
+	ch0       rune // first char of the interval a-b  a in this case
+	ch1       rune // second char of the interval a-b b in this case
 	validator FnValidator = unsafe { nil } // validator function pointer
 }
 
@@ -877,11 +877,11 @@ fn (re RE) parse_quantifier(in_txt string, in_i int) (int, int, int, bool) {
 //
 enum Group_parse_state {
 	start
-	q_mark // (?
-	q_mark1 // (?:|P  checking
-	p_status // (?P
-	p_start // (?P<
-	p_end // (?P<...>
+	q_mark    // (?
+	q_mark1   // (?:|P  checking
+	p_status  // (?P
+	p_start   // (?P<
+	p_end     // (?P<...>
 	p_in_name // (?P<...
 	finish
 }
@@ -1775,15 +1775,15 @@ fn (mut re RE) group_continuous_save(g_index int) {
 *
 ******************************************************************************/
 enum Match_state {
-	start        = 0
+	start = 0
 	stop
 	end
 	new_line
-	ist_load // load and execute instruction
-	ist_next // go to next instruction
-	ist_next_ks // go to next instruction without clenaning the state
-	ist_quant_p // match positive ,quantifier check
-	ist_quant_n // match negative, quantifier check
+	ist_load     // load and execute instruction
+	ist_next     // go to next instruction
+	ist_next_ks  // go to next instruction without clenaning the state
+	ist_quant_p  // match positive ,quantifier check
+	ist_quant_n  // match negative, quantifier check
 	ist_quant_pg // match positive ,group quantifier check
 	ist_quant_ng // match negative ,group quantifier check
 }
@@ -1812,7 +1812,7 @@ pub mut:
 	first_match int = -1 // index of the first match
 	pc          int = -1 // program counter
 	i           int = -1 // source string index
-	char_len    int  // last char legth
+	char_len    int // last char legth
 	last_dot_pc int = -1 // last dot chat pc
 }
 

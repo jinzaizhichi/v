@@ -153,8 +153,8 @@ pub const default_port = 8080
 // It has fields for the query, form, files.
 pub struct Context {
 mut:
-	content_type string = 'text/plain'
-	status       string = '200 OK'
+	content_type string          = 'text/plain'
+	status       string          = '200 OK'
 	ctx          context.Context = context.EmptyContext{}
 pub mut:
 	// HTTP Request
@@ -229,7 +229,7 @@ pub fn (mut ctx Context) send_response_to_client(mimetype string, res string) bo
 		return false
 	}
 	ctx.done = true
-	//
+
 	mut resp := http.Response{
 		body: res
 	}
@@ -244,7 +244,7 @@ pub fn (mut ctx Context) send_response_to_client(mimetype string, res string) bo
 		http.CommonHeader.content_length: resp.body.len.str()
 	}).join(ctx.header)
 	resp.header = header.join(vweb.headers_close)
-	//
+
 	resp.set_version(.v1_1)
 	resp.set_status(http.status_from_int(ctx.status.int()))
 	// send_string(mut ctx.conn, resp.bytestr()) or { return false }
@@ -1222,7 +1222,7 @@ fn (mut w Worker[T]) process_incoming_requests() {
 pub struct PoolParams[T] {
 pub:
 	handler    fn () T = unsafe { nil } @[required]
-	nr_workers int = runtime.nr_jobs()
+	nr_workers int     = runtime.nr_jobs()
 }
 
 // database_pool creates a pool of database connections

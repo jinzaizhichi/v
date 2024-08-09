@@ -333,6 +333,7 @@ pub:
 	comments         []Comment
 	i                int
 	has_default_expr bool
+	has_prev_newline bool
 	attrs            []Attr
 	is_pub           bool
 	default_val      string
@@ -389,7 +390,7 @@ pub:
 pub mut:
 	fields       []ConstField // all the const fields in the `const (...)` block
 	end_comments []Comment    // comments that after last const field
-	is_block     bool // const() block
+	is_block     bool         // const() block
 }
 
 @[minify]
@@ -503,7 +504,7 @@ pub enum StructInitKind {
 pub struct Import {
 pub:
 	source_name string // The original name in the source, `import abc.def` -> 'abc.def', *no matter* how the module is resolved
-	//
+
 	mod       string // the module name of the import
 	alias     string // the `x` in `import xxx as x`
 	pos       token.Pos
@@ -528,7 +529,7 @@ pub struct AnonFn {
 pub mut:
 	decl           FnDecl
 	inherited_vars []Param
-	typ            Type // the type of anonymous fn. Both .typ and .decl.name are auto generated
+	typ            Type            // the type of anonymous fn. Both .typ and .decl.name are auto generated
 	has_gen        map[string]bool // a map of the names of all generic anon functions, generated from it
 }
 
@@ -558,6 +559,7 @@ pub:
 	receiver_pos          token.Pos   // `(u User)` in `fn (u User) name()` position
 	is_method             bool
 	is_static_type_method bool      // true for `fn Foo.bar() {}`
+	static_type_pos       token.Pos // `Foo` in `fn Foo.bar() {}`
 	method_type_pos       token.Pos // `User` in ` fn (u User)` position
 	method_idx            int
 	rec_mut               bool // is receiver mutable
@@ -582,7 +584,7 @@ pub mut:
 	return_type       Type
 	return_type_pos   token.Pos // `string` in `fn (u User) name() string` position
 	has_return        bool
-	should_be_skipped bool      // true, when -skip-unused could not find any usages of that function, starting from main + other known used functions
+	should_be_skipped bool // true, when -skip-unused could not find any usages of that function, starting from main + other known used functions
 	ninstances        int  // 0 for generic functions with no concrete instances
 	has_await         bool // 'true' if this function uses JS.await
 
@@ -664,7 +666,7 @@ pub mut:
 	is_conditional     bool     // true for `[if abc]fn(){}`
 	ctdefine_idx       int      // the index of the attribute, containing the compile time define [if mytag]
 	from_embedded_type Type     // for interface only, fn from the embedded interface
-	from_embeded_type  Type     @[deprecated: 'use from_embedded_type instead'; deprecated_after: '2024-03-31']
+	from_embeded_type  Type @[deprecated: 'use from_embedded_type instead'; deprecated_after: '2024-03-31']
 }
 
 fn (f &Fn) method_equals(o &Fn) bool {
@@ -776,7 +778,8 @@ pub mut:
 	receiver_type          Type // User / T, if receiver is generic, then cgen requires receiver_type to be T
 	receiver_concrete_type Type // if receiver_type is T, then receiver_concrete_type is concrete type, otherwise it is the same as receiver_type
 	return_type            Type
-	return_type_generic    Type   // the original generic return type from fn def
+	return_type_generic    Type // the original generic return type from fn def
+	nr_ret_values          int = -1 // amount of return values
 	fn_var_type            Type   // the fn type, when `is_fn_a_const` or `is_fn_var` is true
 	const_name             string // the fully qualified name of the const, i.e. `main.c`, given `const c = abc`, and callexpr: `c()`
 	should_be_skipped      bool   // true for calls to `[if someflag?]` functions, when there is no `-d someflag`
@@ -823,13 +826,13 @@ pub mut:
 }
 
 pub enum ComptimeVarKind {
-	no_comptime // it is not a comptime var
-	key_var // map key from `for k,v in t.$(field.name)`
-	value_var // map value from `for k,v in t.$(field.name)`
-	field_var // comptime field var `a := t.$(field.name)`
+	no_comptime   // it is not a comptime var
+	key_var       // map key from `for k,v in t.$(field.name)`
+	value_var     // map value from `for k,v in t.$(field.name)`
+	field_var     // comptime field var `a := t.$(field.name)`
 	generic_param // generic fn parameter
-	generic_var // generic var
-	smartcast // smart cast when used in `is v` (when `v` is from $for .variants)
+	generic_var   // generic var
+	smartcast     // smart cast when used in `is v` (when `v` is from $for .variants)
 }
 
 @[minify]
@@ -854,8 +857,8 @@ pub mut:
 	//   [11, 12, 13] <- cast order (smartcasts)
 	//        12 <- the current casted type (typ)
 	pos         token.Pos
-	is_used     bool // whether the local variable was used in other expressions
-	is_changed  bool // to detect mutable vars that are never changed
+	is_used     bool            // whether the local variable was used in other expressions
+	is_changed  bool            // to detect mutable vars that are never changed
 	ct_type_var ComptimeVarKind // comptime variable type
 	// (for setting the position after the or block for autofree)
 	is_or        bool // `x := foo() or { ... }`
@@ -1358,13 +1361,14 @@ pub mut:
 // enum field in enum declaration
 pub struct EnumField {
 pub:
-	name          string // just `lock`, or `abc`, etc, no matter if the name is a keyword or not.
-	source_name   string // The name in the source, for example `@lock`, and `abc`. Note that `lock` is a keyword in V.
-	pos           token.Pos
-	comments      []Comment // comment after Enumfield in the same line
-	next_comments []Comment // comments between current EnumField and next EnumField
-	has_expr      bool      // true, when .expr has a value
-	attrs         []Attr
+	name             string // just `lock`, or `abc`, etc, no matter if the name is a keyword or not.
+	source_name      string // The name in the source, for example `@lock`, and `abc`. Note that `lock` is a keyword in V.
+	pos              token.Pos
+	comments         []Comment // comment after Enumfield in the same line
+	next_comments    []Comment // comments between current EnumField and next EnumField
+	has_expr         bool      // true, when .expr has a value
+	has_prev_newline bool      // empty newline before Enumfield
+	attrs            []Attr
 pub mut:
 	expr Expr // the value of current EnumField; 123 in `ename = 123`
 }
@@ -1643,13 +1647,13 @@ pub mut:
 // addressing modes:
 pub enum AddressingMode {
 	invalid
-	displacement // displacement
-	base // base
-	base_plus_displacement // base + displacement
-	index_times_scale_plus_displacement // (index ∗ scale) + displacement
-	base_plus_index_plus_displacement // base + (index ∗ scale) + displacement
+	displacement                                  // displacement
+	base                                          // base
+	base_plus_displacement                        // base + displacement
+	index_times_scale_plus_displacement           // (index ∗ scale) + displacement
+	base_plus_index_plus_displacement             // base + (index ∗ scale) + displacement
 	base_plus_index_times_scale_plus_displacement // base + index + displacement
-	rip_plus_displacement // rip + displacement
+	rip_plus_displacement                         // rip + displacement
 }
 
 pub struct AsmClobbered {
@@ -1938,6 +1942,7 @@ pub:
 	method_pos       token.Pos
 	scope            &Scope = unsafe { nil }
 	is_vweb          bool
+	is_veb           bool
 	is_embed         bool // $embed_file(...)
 	is_env           bool // $env(...) // TODO: deprecate after $d() is stable
 	is_compile_value bool // $d(...)

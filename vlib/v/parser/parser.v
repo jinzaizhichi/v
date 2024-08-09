@@ -34,9 +34,9 @@ mut:
 	peek_tok                  token.Token
 	language                  ast.Language
 	fn_language               ast.Language // .c for `fn C.abcd()` declarations
-	expr_level                int  // prevent too deep recursions for pathological programs
-	inside_vlib_file          bool // true for all vlib/ files
-	inside_test_file          bool // when inside _test.v or _test.vv file
+	expr_level                int          // prevent too deep recursions for pathological programs
+	inside_vlib_file          bool         // true for all vlib/ files
+	inside_test_file          bool         // when inside _test.v or _test.vv file
 	inside_if                 bool
 	inside_comptime_if        bool
 	inside_if_expr            bool
@@ -83,8 +83,8 @@ mut:
 	expr_mod                  string            // for constructing full type names in parse_type()
 	imports                   map[string]string // alias => mod_name
 	ast_imports               []ast.Import      // mod_names
-	used_imports              []string // alias
-	auto_imports              []string // imports, the user does not need to specify
+	used_imports              []string          // alias
+	auto_imports              []string          // imports, the user does not need to specify
 	imported_symbols          map[string]string
 	is_amp                    bool // for generating the right code for `&Foo{}`
 	returns                   bool
@@ -4103,6 +4103,7 @@ fn (mut p Parser) enum_decl() ast.EnumDecl {
 	mut enum_attrs := map[string][]ast.Attr{}
 	for p.tok.kind != .eof && p.tok.kind != .rcbr {
 		pos := p.tok.pos()
+		has_prev_newline := p.tok.line_nr - p.prev_tok.line_nr - p.prev_tok.lit.count('\n') > 1
 		val := p.check_name()
 		vals << val
 		mut expr := ast.empty_expr
@@ -4129,6 +4130,7 @@ fn (mut p Parser) enum_decl() ast.EnumDecl {
 			pos: pos
 			expr: expr
 			has_expr: has_expr
+			has_prev_newline: has_prev_newline
 			comments: comments
 			next_comments: next_comments
 			attrs: attrs

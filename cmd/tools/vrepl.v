@@ -23,20 +23,20 @@ mut:
 	folder       string // the folder in which the repl will write its temporary source files
 	last_output  string // the last repl output
 	//
-	modules         []string // all the import modules
+	modules         []string          // all the import modules
 	alias           map[string]string // all the alias used in the import
-	includes        []string // all the #include statements
-	functions       []string // all the user function declarations
-	functions_name  []string // all the user function names
-	structs         []string // all the struct definitions
-	enums           []string // all the enum definitions
-	consts          []string // all the const definitions
-	types           []string // all the type definitions
-	interfaces      []string // all the interface definitions
-	lines           []string // all the other lines/statements
-	temp_lines      []string // all the temporary expressions/printlns
-	vstartup_lines  []string // lines in the `VSTARTUP` file
-	eval_func_lines []string // same line of the `VSTARTUP` file, but used to test fn type
+	includes        []string          // all the #include statements
+	functions       []string          // all the user function declarations
+	functions_name  []string          // all the user function names
+	structs         []string          // all the struct definitions
+	enums           []string          // all the enum definitions
+	consts          []string          // all the const definitions
+	types           []string          // all the type definitions
+	interfaces      []string          // all the interface definitions
+	lines           []string          // all the other lines/statements
+	temp_lines      []string          // all the temporary expressions/printlns
+	vstartup_lines  []string          // lines in the `VSTARTUP` file
+	eval_func_lines []string          // same line of the `VSTARTUP` file, but used to test fn type
 }
 
 const is_stdin_a_pipe = os.is_atty(0) == 0
@@ -73,14 +73,14 @@ enum FnType {
 }
 
 enum DeclType {
-	include_ // #include ...
-	const_ // const ...
-	type_ // type ...
-	enum_ // enum ...
-	fn_ // fn ...
-	struct_ // struct ...
+	include_   // #include ...
+	const_     // const ...
+	type_      // type ...
+	enum_      // enum ...
+	fn_        // fn ...
+	struct_    // struct ...
 	interface_ // interface ...
-	stmt_ // statement
+	stmt_      // statement
 }
 
 fn new_repl(folder string) Repl {

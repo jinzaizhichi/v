@@ -29,10 +29,10 @@ pub mut:
 	pos                         int    // current position in the file, first character is s.text[0]
 	line_nr                     int    // current line number
 	last_nl_pos                 int = -1 // for calculating column
-	is_crlf                     bool   // special check when computing columns
-	is_inside_string            bool   // set to true in a string, *at the start* of an $var or ${expr}
-	is_nested_string            bool   // '${'abc':-12s}'
-	is_inter_start              bool   // for hacky string interpolation TODO simplify
+	is_crlf                     bool // special check when computing columns
+	is_inside_string            bool // set to true in a string, *at the start* of an $var or ${expr}
+	is_nested_string            bool // '${'abc':-12s}'
+	is_inter_start              bool // for hacky string interpolation TODO simplify
 	is_inter_end                bool
 	is_enclosed_inter           bool
 	is_nested_enclosed_inter    bool
@@ -42,14 +42,14 @@ pub mut:
 	is_print_line_on_error      bool
 	is_print_colored_error      bool
 	is_print_rel_paths_on_error bool
-	quote                       u8  // which quote is used to denote current string: ' or "
+	quote                       u8 // which quote is used to denote current string: ' or "
 	inter_quote                 u8
 	just_closed_inter           bool // if is_enclosed_inter was set to false on the previous character: `}`
 	nr_lines                    int  // total number of lines in the source file that were scanned
 	is_vh                       bool // Keep newlines
 	is_fmt                      bool // Used for v fmt.
 	comments_mode               CommentsMode
-	is_inside_toplvl_statement  bool // *only* used in comments_mode: .toplevel_comments, toggled by parser
+	is_inside_toplvl_statement  bool          // *only* used in comments_mode: .toplevel_comments, toggled by parser
 	all_tokens                  []token.Token // *only* used in comments_mode: .toplevel_comments, contains all tokens
 	tidx                        int
 	eofs                        int
@@ -1445,6 +1445,10 @@ fn (mut s Scanner) decode_o_escapes(sinput string, start int, escapes_pos []int)
 
 fn (mut s Scanner) decode_u16_escape_single(str string, idx int) (int, string) {
 	end_idx := idx + 6 // "\uXXXX".len == 6
+	if idx + 2 > str.len || end_idx > str.len {
+		s.error_with_pos('unfinished u16 escape started at', s.current_pos())
+		return 0, ''
+	}
 	escaped_code_point := strconv.parse_uint(str[idx + 2..end_idx], 16, 32) or { 0 }
 	// Check if Escaped Code Point is invalid or not
 	if rune(escaped_code_point).length_in_bytes() == -1 {
@@ -1468,6 +1472,10 @@ fn (mut s Scanner) decode_u16erune(str string) string {
 
 fn (mut s Scanner) decode_u32_escape_single(str string, idx int) (int, string) {
 	end_idx := idx + 10 // "\uXXXXXXXX".len == 10
+	if idx + 2 > str.len || end_idx > str.len {
+		s.error_with_pos('unfinished u32 escape started at', s.current_pos())
+		return 0, ''
+	}
 	escaped_code_point := strconv.parse_uint(str[idx + 2..end_idx], 16, 32) or { 0 }
 	// Check if Escaped Code Point is invalid or not
 	if rune(escaped_code_point).length_in_bytes() == -1 {

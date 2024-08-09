@@ -56,7 +56,7 @@ pub fn prepare_vc_source(vcdir string, cdir string, commit string) (string, stri
 	check_v_commit_timestamp_before_self_rebuilding(v_timestamp)
 	scripting.chdir(vcdir)
 	scripting.run('git checkout --quiet master')
-	//
+
 	mut vccommit := ''
 	mut partial_hash := v_commithash[0..7]
 	if '5b7a1e8'.starts_with(partial_hash) {
@@ -121,8 +121,8 @@ pub fn clone_or_pull(remote_git_url string, local_worktree_path string) {
 
 pub struct VGitContext {
 pub:
-	cc          string = 'cc' // what compiler to use
-	workdir     string = '/tmp' // the base working folder
+	cc          string = 'cc'     // what compiler to use
+	workdir     string = '/tmp'   // the base working folder
 	commit_v    string = 'master' // the commit-ish that needs to be prepared
 	path_v      string // where is the local working copy v repo
 	path_vc     string // where is the local working copy vc repo

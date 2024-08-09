@@ -67,15 +67,15 @@ pub:
 	native_frame_fn   FNCb   = unsafe { nil }
 	cleanup_fn        FNCb   = unsafe { nil } // Called once, after Sokol determines that the application is finished/closed. Put your app specific cleanup/free actions here.
 	fail_fn           FNFail = unsafe { nil } // Called once per Sokol error/log message. TODO: currently it does nothing with latest Sokol, reimplement using Sokol's new sapp_logger APIs.
-	//
+
 	event_fn FNEvent  = unsafe { nil } // Called once per each user initiated event, received by Sokol/GG.
 	on_event FNEvent2 = unsafe { nil } // Called once per each user initiated event, received by Sokol/GG. Same as event_fn, just the parameter order is different. TODO: deprecate this, in favor of event_fn
 	quit_fn  FNEvent  = unsafe { nil } // Called when the user closes the app window.
-	//
+
 	keydown_fn FNKeyDown = unsafe { nil } // Called once per key press, no matter how long the key is held down. Note that here you can access the scan code/physical key, but not the logical character.
 	keyup_fn   FNKeyUp   = unsafe { nil } // Called once per key press, when the key is released.
 	char_fn    FNChar    = unsafe { nil } // Called once per character (after the key is pressed down, and then released). Note that you can access the character/utf8 rune here, not just the scan code.
-	//
+
 	move_fn    FNMove    = unsafe { nil } // Called while the mouse/touch point is moving.
 	click_fn   FNClick   = unsafe { nil } // Called once when the mouse/touch button is clicked.
 	unclick_fn FNUnClick = unsafe { nil } // Called once when the mouse/touch button is released.
@@ -84,28 +84,28 @@ pub:
 	resized_fn FNEvent   = unsafe { nil } // Called once when the window has changed its size.
 	scroll_fn  FNEvent   = unsafe { nil } // Called while the user is scrolling. The direction of scrolling is indicated by either 1 or -1.
 	// wait_events       bool // set this to true for UIs, to save power
-	fullscreen    bool   // set this to true, if you want your window to start in fullscreen mode (suitable for games/demos/screensavers)
+	fullscreen    bool // set this to true, if you want your window to start in fullscreen mode (suitable for games/demos/screensavers)
 	scale         f32 = 1.0
-	sample_count  int      // bigger values usually have performance impact, but can produce smoother/antialiased lines, if you draw lines or polygons (2 is usually good enough)
+	sample_count  int // bigger values usually have performance impact, but can produce smoother/antialiased lines, if you draw lines or polygons (2 is usually good enough)
 	swap_interval int = 1 // 1 = 60fps, 2 = 30fps etc. The preferred swap interval (ignored on some platforms)
 	// ved needs this
 	// init_text bool
 	font_path             string
 	custom_bold_font_path string
-	ui_mode               bool      // refreshes only on events to save CPU usage
+	ui_mode               bool // refreshes only on events to save CPU usage
 	// font bytes for embedding
 	font_bytes_normal []u8
 	font_bytes_bold   []u8
 	font_bytes_mono   []u8
 	font_bytes_italic []u8
-	native_rendering  bool      // Cocoa on macOS/iOS, GDI+ on Windows
+	native_rendering  bool // Cocoa on macOS/iOS, GDI+ on Windows
 	// drag&drop
 	enable_dragndrop             bool // enable file dropping (drag'n'drop), default is false
-	max_dropped_files            int = 1 // max number of dropped files to process (default: 1)
+	max_dropped_files            int = 1    // max number of dropped files to process (default: 1)
 	max_dropped_file_path_length int = 2048 // max length in bytes of a dropped UTF-8 file path (default: 2048)
-	//
+
 	min_width  int // desired minimum width of the window
-	min_height int  // desired minimum height of the window
+	min_height int // desired minimum height of the window
 }
 
 @[heap]
@@ -169,7 +169,7 @@ pub mut:
 	font_inited bool
 	ui_mode     bool // do not redraw everything 60 times/second, but only when the user requests
 	frame       u64  // the current frame counted from the start of the application; always increasing
-	//
+
 	mbtn_mask     u8
 	mouse_buttons MouseButtons // typed version of mbtn_mask; easier to use for user programs
 	mouse_pos_x   int
@@ -178,9 +178,9 @@ pub mut:
 	mouse_dy      int
 	scroll_x      int
 	scroll_y      int
-	//
-	key_modifiers     Modifier // the current key modifiers
-	key_repeat        bool     // whether the pressed key was an autorepeated one
+
+	key_modifiers     Modifier           // the current key modifiers
+	key_repeat        bool               // whether the pressed key was an autorepeated one
 	pressed_keys      [key_code_max]bool // an array representing all currently pressed keys
 	pressed_keys_edge [key_code_max]bool // true when the previous state of pressed_keys,
 	// *before* the current event was different
@@ -752,7 +752,7 @@ pub fn window_size() Size {
 
 // set_window_title sets main window's title
 pub fn set_window_title(title string) {
-	C.sapp_set_window_title(title.str)
+	C.sapp_set_window_title(&char(title.str))
 }
 
 // window_size_real_pixels returns the `Size` of the active window without scale

@@ -27,11 +27,11 @@ pub enum AssertFailureMode {
 pub enum GarbageCollectionMode {
 	unknown
 	no_gc
-	boehm_full // full garbage collection mode
-	boehm_incr // incremental garbage collection mode
+	boehm_full     // full garbage collection mode
+	boehm_incr     // incremental garbage collection mode
 	boehm_full_opt // full garbage collection mode
 	boehm_incr_opt // incremental garbage collection mode
-	boehm_leak // leak detection mode (makes `gc_check_leaks()` work)
+	boehm_leak     // leak detection mode (makes `gc_check_leaks()` work)
 }
 
 pub enum OutputMode {
@@ -46,14 +46,14 @@ pub enum ColorOutput {
 }
 
 pub enum Backend {
-	c // The (default) C backend
-	golang // Go backend
-	interpret // Interpret the ast
-	js_node // The JavaScript NodeJS backend
-	js_browser // The JavaScript browser backend
+	c               // The (default) C backend
+	golang          // Go backend
+	interpret       // Interpret the ast
+	js_node         // The JavaScript NodeJS backend
+	js_browser      // The JavaScript browser backend
 	js_freestanding // The JavaScript freestanding backend
-	native // The Native backend
-	wasm // The WebAssembly backend
+	native          // The Native backend
+	wasm            // The WebAssembly backend
 }
 
 pub fn (b Backend) is_js() bool {
@@ -129,8 +129,8 @@ pub mut:
 	hide_auto_str      bool     // `v -hide-auto-str program.v`, doesn't generate str() with struct data
 	// Note: passing -cg instead of -g will set is_vlines to false and is_debug to true, thus making v generate cleaner C files,
 	// which are sometimes easier to debug / inspect manually than the .tmp.c files by plain -g (when/if v line number generation breaks).
-	sanitize               bool   // use Clang's new "-fsanitize" option
-	sourcemap              bool   // JS Backend: -sourcemap will create a source map - default false
+	sanitize               bool // use Clang's new "-fsanitize" option
+	sourcemap              bool // JS Backend: -sourcemap will create a source map - default false
 	sourcemap_inline       bool = true // JS Backend: -sourcemap-inline will embed the source map in the generated JaaScript file -  currently default true only implemented
 	sourcemap_src_included bool   // JS Backend: -sourcemap-src-included includes V source code in source map -  default false
 	show_cc                bool   // -showcc, print cc command
@@ -143,7 +143,7 @@ pub mut:
 	dump_defines           string // `-dump-defines defines.txt` - let V store all the defines that affect the current program and their values, one define per line + `,` + its value.
 	use_cache              bool   // when set, use cached modules to speed up subsequent compilations, at the cost of slower initial ones (while the modules are cached)
 	retry_compilation      bool = true // retry the compilation with another C compiler, if tcc fails.
-	use_os_system_to_run   bool   // when set, use os.system() to run the produced executable, instead of os.new_process; works around segfaults on macos, that may happen when xcode is updated
+	use_os_system_to_run   bool // when set, use os.system() to run the produced executable, instead of os.new_process; works around segfaults on macos, that may happen when xcode is updated
 	macosx_version_min     string = '0' // relevant only for macos and ios targets
 	// TODO: Convert this into a []string
 	cflags  string // Additional options which will be passed to the C compiler *before* other options.
@@ -185,22 +185,21 @@ pub mut:
 	path             string // Path to file/folder to compile
 	line_info        string // `-line-info="file.v:28"`: for "mini VLS" (shows information about objects on provided line)
 	linfo            LineInfo
-	//
+
 	run_only []string // VTEST_ONLY_FN and -run-only accept comma separated glob patterns.
 	exclude  []string // glob patterns for excluding .v files from the list of .v files that otherwise would have been used for a compilation, example: `-exclude @vlib/math/*.c.v`
 	// Only test_ functions that match these patterns will be run. -run-only is valid only for _test.v files.
-	//
 	// -d vfmt and -d another=0 for `$if vfmt { will execute }` and `$if another ? { will NOT get here }`
-	compile_defines     []string // just ['vfmt']
-	compile_defines_all []string // contains both: ['vfmt','another']
+	compile_defines     []string          // just ['vfmt']
+	compile_defines_all []string          // contains both: ['vfmt','another']
 	compile_values      map[string]string // the map will contain for `-d key=value`: compile_values['key'] = 'value', and for `-d ident`, it will be: compile_values['ident'] = 'true'
-	//
+
 	run_args     []string // `v run x.v 1 2 3` => `1 2 3`
 	printfn_list []string // a list of generated function names, whose source should be shown, for debugging
-	//
+
 	print_v_files       bool // when true, just print the list of all parsed .v files then stop.
 	print_watched_files bool // when true, just print the list of all parsed .v files + all the compiled $tmpl files, then stop. Used by `v watch run webserver.v`
-	//
+
 	skip_running     bool // when true, do no try to run the produced file (set by b.cc(), when -o x.c or -o x.js)
 	skip_warnings    bool // like C's "-w", forces warnings to be ignored.
 	skip_notes       bool // force notices to be ignored/not shown.
@@ -211,20 +210,20 @@ pub mut:
 	reuse_tmpc       bool // do not use random names for .tmp.c and .tmp.c.rsp files, and do not remove them
 	no_rsp           bool // when true, pass C backend options directly on the CLI (do not use `.rsp` files for them, some older C compilers do not support them)
 	no_std           bool // when true, do not pass -std=gnu99(linux)/-std=c99 to the C backend
-	//
+
 	no_parallel       bool // do not use threads when compiling; slower, but more portable and sometimes less buggy
 	parallel_cc       bool // whether to split the resulting .c file into many .c files + a common .h file, that are then compiled in parallel, then linked together.
 	only_check_syntax bool // when true, just parse the files, then stop, before running checker
 	check_only        bool // same as only_check_syntax, but also runs the checker
 	experimental      bool // enable experimental features
 	skip_unused       bool // skip generating C code for functions, that are not used
-	//
+
 	use_color           ColorOutput // whether the warnings/errors should use ANSI color escapes.
 	cleanup_files       []string    // list of temporary *.tmp.c and *.tmp.c.rsp files. Cleaned up on successful builds.
 	build_options       []string    // list of options, that should be passed down to `build-module`, if needed for -usecache
 	cache_manager       vcache.CacheManager
 	gc_mode             GarbageCollectionMode = .unknown // .no_gc, .boehm, .boehm_leak, ...
-	assert_failure_mode AssertFailureMode     // whether to call abort() or print_backtrace() after an assertion failure
+	assert_failure_mode AssertFailureMode // whether to call abort() or print_backtrace() after an assertion failure
 	message_limit       int = 150 // the maximum amount of warnings/errors/notices that will be accumulated
 	nofloat             bool // for low level code, like kernels: replaces f32 with u32 and f64 with u64
 	use_coroutines      bool // experimental coroutines
@@ -244,10 +243,10 @@ pub mut:
 
 pub struct LineInfo {
 pub mut:
-	line_nr      int    // a quick single file run when called with v -line-info (contains line nr to inspect)
-	path         string // same, but stores the path being parsed
-	expr         string // "foo" or "foo.bar" V code (expression) which needs autocomplete
-	is_running   bool   // so that line info is fetched only on the second checker run
+	line_nr      int             // a quick single file run when called with v -line-info (contains line nr to inspect)
+	path         string          // same, but stores the path being parsed
+	expr         string          // "foo" or "foo.bar" V code (expression) which needs autocomplete
+	is_running   bool            // so that line info is fetched only on the second checker run
 	vars_printed map[string]bool // to avoid dups
 }
 
@@ -289,11 +288,11 @@ fn run_code_in_tmp_vfile_and_exit(args []string, mut res Preferences, option_nam
 	command_options := cmdline.options_after(args, [option_name])[1..].join(' ')
 	vexe := vexe_path()
 	tmp_cmd := '${os.quoted_path(vexe)} ${output_option} ${run_options} run ${os.quoted_path(tmp_v_file_path)} ${command_options}'
-	//
+
 	res.vrun_elog('tmp_cmd: ${tmp_cmd}')
 	tmp_result := os.system(tmp_cmd)
 	res.vrun_elog('exit code: ${tmp_result}')
-	//
+
 	if output_option != '' {
 		res.vrun_elog('remove tmp exe file: ${tmp_exe_file_path}')
 		os.rm(tmp_exe_file_path) or {}

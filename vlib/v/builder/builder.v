@@ -20,7 +20,7 @@ pub:
 	compiled_dir string // contains os.real_path() of the dir of the final file being compiled, or the dir itself when doing `v .`
 	module_path  string
 pub mut:
-	checker             &checker.Checker = unsafe { nil }
+	checker             &checker.Checker         = unsafe { nil }
 	transformer         &transformer.Transformer = unsafe { nil }
 	out_name_c          string
 	out_name_js         string
@@ -37,13 +37,12 @@ pub mut:
 	//}
 	table     &ast.Table = unsafe { nil }
 	ccoptions CcompilerOptions
-	//
 	// Note: changes in mod `builtin` force invalidation of every other .v file
 	mod_invalidates_paths map[string][]string // changes in mod `os`, invalidate only .v files, that do `import os`
 	mod_invalidates_mods  map[string][]string // changes in mod `os`, force invalidation of mods, that do `import os`
 	path_invalidates_mods map[string][]string // changes in a .v file from `os`, invalidates `os`
-	crun_cache_keys       []string // target executable + top level source files; filled in by Builder.should_rebuild
-	executable_exists     bool     // if the executable already exists, don't remove new executable after `v run`
+	crun_cache_keys       []string            // target executable + top level source files; filled in by Builder.should_rebuild
+	executable_exists     bool                // if the executable already exists, don't remove new executable after `v run`
 }
 
 pub fn new_builder(pref_ &pref.Preferences) Builder {
@@ -141,7 +140,7 @@ pub fn (mut b Builder) middle_stages() ! {
 	util.timing_start('TRANSFORM')
 	b.transformer.transform_files(b.parsed_files)
 	util.timing_measure('TRANSFORM')
-	//
+
 	b.table.complete_interface_check()
 	if b.pref.skip_unused {
 		markused.mark_used(mut b.table, mut b.pref, b.parsed_files)
@@ -565,7 +564,7 @@ pub fn (mut b Builder) print_warnings_and_errors() {
 			util.show_compiler_message(kind, err.CompilerMessage)
 		}
 	}
-	//
+
 	if b.pref.is_verbose && b.checker.nr_errors > 1 {
 		println('${b.checker.nr_errors} errors')
 	}

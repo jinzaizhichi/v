@@ -1,8 +1,8 @@
 module flag
 
 struct FlagData {
-	raw        string  @[required]
-	field_name string  @[required]
+	raw        string @[required]
+	field_name string @[required]
 	delimiter  string
 	name       string
 	arg        ?string
@@ -19,16 +19,16 @@ struct FlagContext {
 }
 
 pub enum Style {
-	short // Posix short only, allows multiple shorts -def is `-d -e -f` and "sticky" arguments e.g.: `-ofoo` = `-o foo`
-	long // GNU style long option *only*. E.g.: `--name` or `--name=value`
+	short      // Posix short only, allows multiple shorts -def is `-d -e -f` and "sticky" arguments e.g.: `-ofoo` = `-o foo`
+	long       // GNU style long option *only*. E.g.: `--name` or `--name=value`
 	short_long // extends `posix` style shorts with GNU style long options: `--flag` or `--name=value`
-	v // V style flags as found in flags for the `v` compiler. Single flag denote `-` followed by string identifier e.g.: `-verbose`, `-name value`, `-v`, `-n value` or `-d ident=value`
-	go_flag // GO `flag` module style. Single flag denote `-` followed by string identifier e.g.: `-verbose`, `-name value`, `-v` or `-n value` and both long `--name value` and GNU long `--name=value`
-	cmd_exe // `cmd.exe` style flags. Single flag denote `/` followed by lower- or upper-case character
+	v          // V style flags as found in flags for the `v` compiler. Single flag denote `-` followed by string identifier e.g.: `-verbose`, `-name value`, `-v`, `-n value` or `-d ident=value`
+	go_flag    // GO `flag` module style. Single flag denote `-` followed by string identifier e.g.: `-verbose`, `-name value`, `-v` or `-n value` and both long `--name value` and GNU long `--name=value`
+	cmd_exe    // `cmd.exe` style flags. Single flag denote `/` followed by lower- or upper-case character
 }
 
 struct StructInfo {
-	name   string // name of the struct itself
+	name   string            // name of the struct itself
 	attrs  map[string]string // collection of `@[x: y]` sat on the struct, read via reflection
 	fields map[string]StructField
 }
@@ -72,7 +72,7 @@ fn (sf StructField) shortest_match_name() ?string {
 @[params]
 pub struct ParseConfig {
 pub:
-	delimiter string = '-' // delimiter used for flags
+	delimiter string = '-'         // delimiter used for flags
 	style     Style  = .short_long // expected flag style
 	stop      ?string // single, usually '--', string that stops parsing flags/options
 	skip      u16     // skip this amount in the input argument array, usually `1` for skipping executable or subcmd entry
@@ -81,7 +81,7 @@ pub:
 @[params]
 pub struct DocConfig {
 pub:
-	delimiter string = '-' // delimiter used for flags
+	delimiter string = '-'         // delimiter used for flags
 	style     Style  = .short_long // expected flag style
 pub mut:
 	name        string            // application name

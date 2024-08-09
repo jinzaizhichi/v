@@ -108,11 +108,11 @@ fn is_exp(x u8) bool {
 
 // Possible parser return values.
 enum ParserState {
-	ok // parser finished OK
-	pzero // no digits or number is smaller than +-2^-1022
-	mzero // number is negative, module smaller
-	pinf // number is higher than +HUGE_VAL
-	minf // number is lower than -HUGE_VAL
+	ok             // parser finished OK
+	pzero          // no digits or number is smaller than +-2^-1022
+	mzero          // number is negative, module smaller
+	pinf           // number is higher than +HUGE_VAL
+	minf           // number is lower than -HUGE_VAL
 	invalid_number // invalid number, used for '#@%^' for example
 }
 
@@ -236,7 +236,7 @@ fn converter(mut pn PrepNumber) u64 {
 	mut r2 := u32(0)
 	mut r1 := u32(0)
 	mut r0 := u32(0)
-	//
+
 	mask28 := u32(u64(0xF) << 28)
 	mut result := u64(0)
 	// working on 3 u32 to have 96 bit precision

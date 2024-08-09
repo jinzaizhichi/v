@@ -553,11 +553,17 @@ fn (mut g Gen) gen_array_map(node ast.CallExpr) {
 		ast.Ident {
 			g.write('${ret_elem_type} ${tmp_map_expr_result_name} = ')
 			if expr.kind == .function {
+				if expr.obj is ast.Var && expr.obj.is_inherited {
+					g.write(closure_ctx + '->')
+				}
 				g.write('${c_name(expr.name)}(${var_name})')
 			} else if expr.kind == .variable {
 				var_info := expr.var_info()
 				sym := g.table.sym(var_info.typ)
 				if sym.kind == .function {
+					if expr.obj is ast.Var && expr.obj.is_inherited {
+						g.write(closure_ctx + '->')
+					}
 					g.write('${c_name(expr.name)}(${var_name})')
 				} else {
 					g.expr(expr)
@@ -939,6 +945,10 @@ fn (mut g Gen) get_array_contains_method(typ ast.Type) string {
 
 fn (mut g Gen) gen_array_contains_methods() {
 	mut done := []ast.Type{}
+	mut got_int_str := false
+	$if new_int ? {
+		println(g.array_contains_types)
+	}
 	for t in g.array_contains_types {
 		left_final_sym := g.table.final_sym(t)
 		if left_final_sym.idx in done || g.table.sym(t).has_method('contains') {
@@ -948,6 +958,20 @@ fn (mut g Gen) gen_array_contains_methods() {
 		mut fn_builder := strings.new_builder(512)
 		mut left_type_str := g.typ(t)
 		fn_name := '${left_type_str}_contains'
+
+		$if new_int ? {
+			if fn_name == 'Array_i64_contains' {
+				if got_int_str {
+					continue
+				} else {
+					got_int_str = true
+				}
+			}
+
+			// if t == ast.int_type_idx || t == ast.i64_type_idx {
+			// continue
+			//}
+		}
 
 		if left_final_sym.kind == .array {
 			elem_type := (left_final_sym.info as ast.Array).elem_type

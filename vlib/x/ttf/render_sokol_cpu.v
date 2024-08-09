@@ -24,7 +24,7 @@ pub mut:
 	sg_img       gfx.Image   // sokol image
 	sg_smp       gfx.Sampler // sokol sampler
 	scale_reduct f32 = 2.0 // scale of the cpu texture for filtering
-	device_dpi   int = 72 // device DPI
+	device_dpi   int = 72  // device DPI
 }
 
 /******************************************************************************
@@ -204,7 +204,7 @@ pub fn (tf_skl TTF_render_Sokol) draw_text_bmp(ctx &gg.Context, x f32, y f32) {
 		1,
 	]
 	sgl.mult_matrix(m)
-	//
+
 	sgl.load_pipeline(ctx.pipeline.alpha)
 	sgl.enable_texture()
 	sgl.texture(tf_skl.sg_img, tf_skl.sg_smp)

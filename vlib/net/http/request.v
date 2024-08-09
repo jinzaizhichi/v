@@ -37,20 +37,20 @@ pub mut:
 	// time = -1 for no timeout
 	read_timeout  i64 = 30 * time.second
 	write_timeout i64 = 30 * time.second
-	//
+
 	validate               bool // when true, certificate failures will stop further processing
 	verify                 string
 	cert                   string
 	cert_key               string
 	in_memory_verification bool // if true, verify, cert, and cert_key are read from memory, not from a file
 	allow_redirect         bool = true // whether to allow redirect
-	max_retries            int  = 5 // maximum number of retries required when an underlying socket error occurs
+	max_retries            int  = 5    // maximum number of retries required when an underlying socket error occurs
 	// callbacks to allow custom reporting code to run, while the request is running, and to implement streaming
 	on_redirect      RequestRedirectFn     = unsafe { nil }
 	on_progress      RequestProgressFn     = unsafe { nil }
 	on_progress_body RequestProgressBodyFn = unsafe { nil }
 	on_finish        RequestFinishFn       = unsafe { nil }
-	//
+
 	stop_copying_limit   i64 = -1 // after this many bytes are received, stop copying to the response. Note that on_progress and on_progress_body callbacks, will continue to fire normally, until the full response is read, which allows you to implement streaming downloads, without keeping the whole big response in memory
 	stop_receiving_limit i64 = -1 // after this many bytes are received, break out of the loop that reads the response, effectively stopping the request early. No more on_progress callbacks will be fired. The on_finish callback will fire.
 }
