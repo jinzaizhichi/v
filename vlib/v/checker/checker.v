@@ -148,6 +148,8 @@ mut:
 
 	v_current_commit_hash string // same as old C.V_CURRENT_COMMIT_HASH
 	assign_stmt_attr      string // for `x := [1,2,3] @[freed]`
+
+	js_string ast.Type = ast.void_type // when `js"string literal"` is used, `js_string` will be equal to `JS.String`
 }
 
 pub fn new_checker(table &ast.Table, pref_ &pref.Preferences) &Checker {
@@ -509,7 +511,7 @@ fn (mut c Checker) check_valid_snake_case(name string, identifier string, pos to
 	if !c.pref.is_vweb && name.len > 1 && (name[0] == `_` || name.contains('._')) {
 		c.error('${identifier} `${name}` cannot start with `_`', pos)
 	}
-	if !c.pref.experimental && util.contains_capital(name) {
+	if util.contains_capital(name) {
 		c.error('${identifier} `${name}` cannot contain uppercase letters, use snake_case instead',
 			pos)
 	}
@@ -909,10 +911,8 @@ fn (mut c Checker) fail_if_immutable(mut expr ast.Expr) (string, token.Pos) {
 		}
 		ast.ComptimeSelector {
 			mut expr_left := expr.left
-			if mut expr.left is ast.Ident {
-				if mut expr.left.obj is ast.Var {
-					c.fail_if_immutable(mut expr_left)
-				}
+			if mut expr.left is ast.Ident && expr.left.obj is ast.Var {
+				c.fail_if_immutable(mut expr_left)
 			}
 			return '', expr.pos
 		}
@@ -1114,6 +1114,9 @@ fn (mut c Checker) fail_if_immutable(mut expr ast.Expr) (string, token.Pos) {
 				c.fail_if_immutable(mut last_expr)
 			}
 			return '', expr.pos
+		}
+		ast.AsCast {
+			to_lock, pos = c.fail_if_immutable(mut expr.expr)
 		}
 		else {
 			if !expr.is_pure_literal() {
@@ -1676,10 +1679,8 @@ fn (mut c Checker) selector_expr(mut node ast.SelectorExpr) ast.Type {
 	c.inside_selector_expr = true
 	mut typ := c.expr(mut node.expr)
 	if node.expr.is_auto_deref_var() {
-		if mut node.expr is ast.Ident {
-			if mut node.expr.obj is ast.Var {
-				typ = node.expr.obj.typ
-			}
+		if mut node.expr is ast.Ident && node.expr.obj is ast.Var {
+			typ = node.expr.obj.typ
 		}
 	}
 	c.inside_selector_expr = old_selector_expr
@@ -2635,6 +2636,13 @@ fn (mut c Checker) hash_stmt(mut node ast.HashStmt) {
 		'include', 'insert', 'preinclude', 'postinclude' {
 			original_flag := node.main
 			mut flag := node.main
+			if flag.contains('@DIR') {
+				vdir := c.dir_path()
+				val := flag.replace('@DIR', vdir)
+				node.val = '${node.kind} ${val}'
+				node.main = val
+				flag = val
+			}
 			if flag.contains('@VROOT') {
 				// c.note(checker.vroot_is_deprecated_message, node.pos)
 				vroot := util.resolve_vmodroot(flag.replace('@VROOT', '@VMODROOT'), c.file.path) or {
@@ -2740,6 +2748,10 @@ fn (mut c Checker) hash_stmt(mut node ast.HashStmt) {
 					c.error(err.msg(), node.pos)
 					return
 				}
+			}
+			if flag.contains('@DIR') {
+				// expand `@DIR` to its absolute path
+				flag = flag.replace('@DIR', c.dir_path())
 			}
 			if flag.contains('@VEXEROOT') {
 				// expand `@VEXEROOT` to its absolute path
@@ -3278,6 +3290,13 @@ pub fn (mut c Checker) expr(mut node ast.Expr) ast.Type {
 			if node.language == .c {
 				// string literal starts with "c": `C.printf(c'hello')`
 				return ast.u8_type.set_nr_muls(1)
+			}
+			if node.language == .js {
+				// string literal starts with "js": `JS.console.log(js'hello')`
+				if c.js_string.is_void() {
+					c.js_string = c.table.find_type('JS.String')
+				}
+				return c.js_string
 			}
 			if node.is_raw {
 				// raw strings don't need any sort of checking related to unicode
@@ -3906,6 +3925,9 @@ fn (mut c Checker) at_expr(mut node ast.AtExpr) ast.Type {
 		.file_path {
 			node.val = os.real_path(c.file.path)
 		}
+		.file_dir {
+			node.val = os.real_path(os.dir(c.file.path))
+		}
 		.line_nr {
 			node.val = (node.pos.line_nr + 1).str()
 		}
@@ -4032,18 +4054,17 @@ fn (mut c Checker) ident(mut node ast.Ident) ast.Type {
 		// used inside its initialisation like: `struct Abc { x &Abc } ... const a = [ Abc{0}, Abc{unsafe{&a[0]}} ]!`
 		// see vlib/v/tests/const_fixed_array_containing_references_to_itself_test.v
 		if unsafe { c.const_var != 0 } && name == c.const_var.name {
-			if mut c.const_var.expr is ast.ArrayInit {
-				if c.const_var.expr.is_fixed && c.expected_type.nr_muls() > 0 {
-					elem_typ := c.expected_type.deref()
-					node.kind = .constant
-					node.name = c.const_var.name
-					node.info = ast.IdentVar{
-						typ: elem_typ
-					}
-					// c.const_var.typ = elem_typ
-					node.obj = c.const_var
-					return c.expected_type
+			if mut c.const_var.expr is ast.ArrayInit && c.const_var.expr.is_fixed
+				&& c.expected_type.nr_muls() > 0 {
+				elem_typ := c.expected_type.deref()
+				node.kind = .constant
+				node.name = c.const_var.name
+				node.info = ast.IdentVar{
+					typ: elem_typ
 				}
+				// c.const_var.typ = elem_typ
+				node.obj = c.const_var
+				return c.expected_type
 			}
 			c.error('cycle in constant `${c.const_var.name}`', node.pos)
 			return ast.void_type
@@ -4055,9 +4076,8 @@ fn (mut c Checker) ident(mut node ast.Ident) ast.Type {
 			c.error('undefined ident: `_` (may only be used in assignments)', node.pos)
 		}
 		return ast.void_type
-	}
-	// second use
-	if node.kind in [.constant, .global, .variable] {
+	} else if node.kind in [.constant, .global, .variable] {
+		// second use
 		info := node.info as ast.IdentVar
 		typ := c.type_resolver.get_type_or_default(node, info.typ)
 		// Got a var with type T, return current generic type
@@ -4351,10 +4371,6 @@ fn (mut c Checker) ident(mut node ast.Ident) ast.Type {
 			}
 		}
 	}
-	if c.table.known_type(node.name) {
-		// e.g. `User`  in `json.decode(User, '...')`
-		return ast.void_type
-	}
 	return ast.void_type
 }
 
@@ -4413,7 +4429,10 @@ fn (mut c Checker) smartcast(mut expr ast.Expr, cur_type ast.Type, to_type_ ast.
 					orig_type = field.typ
 				}
 			}
-			expr_str := expr.expr.str()
+			mut expr_str := expr.expr.str()
+			if mut expr.expr is ast.ParExpr && expr.expr.expr is ast.AsCast {
+				expr_str = expr.expr.expr.expr.str()
+			}
 			field := scope.find_struct_field(expr_str, expr.expr_type, expr.field_name)
 			if field != unsafe { nil } {
 				smartcasts << field.smartcasts
@@ -4636,7 +4655,7 @@ fn (mut c Checker) find_obj_definition(obj ast.ScopeObject) !ast.Expr {
 	// TODO: remove once we have better type inference
 	mut name := ''
 	match obj {
-		ast.Var, ast.ConstField, ast.GlobalField, ast.AsmRegister { name = obj.name }
+		ast.EmptyScopeObject, ast.Var, ast.ConstField, ast.GlobalField, ast.AsmRegister { name = obj.name }
 	}
 	mut expr := ast.empty_expr
 	if obj is ast.Var {
@@ -4767,10 +4786,7 @@ fn (mut c Checker) prefix_expr(mut node ast.PrefixExpr) ast.Type {
 	c.inside_ref_lit = old_inside_ref_lit
 	node.right_type = right_type
 	mut expr := node.right
-	// if ParExpr get the innermost expr
-	for mut expr is ast.ParExpr {
-		expr = expr.expr
-	}
+	expr = expr.remove_par()
 	if node.op == .amp {
 		if expr is ast.Nil {
 			c.error('invalid operation: cannot take address of nil', expr.pos())
@@ -5053,15 +5069,12 @@ fn (mut c Checker) index_expr(mut node ast.IndexExpr) ast.Type {
 		|| typ.is_pointer() {
 		mut is_ok := false
 		mut is_mut_struct := false
-		if mut node.left is ast.Ident {
-			if mut node.left.obj is ast.Var {
-				// `mut param []T` function parameter
-				is_ok = node.left.obj.is_mut && node.left.obj.is_arg && !typ.deref().is_ptr()
-					&& typ_sym.kind != .struct
-				// `mut param Struct`
-				is_mut_struct = node.left.obj.is_mut && node.left.obj.is_arg
-					&& typ_sym.kind == .struct
-			}
+		if mut node.left is ast.Ident && node.left.obj is ast.Var {
+			// `mut param []T` function parameter
+			is_ok = node.left.obj.is_mut && node.left.obj.is_arg && !typ.deref().is_ptr()
+				&& typ_sym.kind != .struct
+			// `mut param Struct`
+			is_mut_struct = node.left.obj.is_mut && node.left.obj.is_arg && typ_sym.kind == .struct
 		}
 		if !is_ok && node.index is ast.RangeExpr {
 			s := c.table.type_to_str(typ)
@@ -5733,4 +5746,8 @@ pub fn (mut c Checker) update_unresolved_fixed_sizes() {
 			}
 		}
 	}
+}
+
+fn (mut c Checker) dir_path() string {
+	return os.real_path(os.dir(c.file.path))
 }

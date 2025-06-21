@@ -5,6 +5,7 @@ module native
 
 import v.ast
 import v.util
+import v.errors
 
 fn (mut g Gen) expr(node ast.Expr) {
 	match node {
@@ -46,6 +47,12 @@ fn (mut g Gen) expr(node ast.Expr) {
 			match var {
 				LocalVar {
 					g.local_var_ident(node, var)
+				}
+				ExternVar {
+					g.extern_var_ident(var)
+				}
+				PreprocVar {
+					g.preproc_var_ident(var)
 				}
 				else {
 					g.n_error('${@LOCATION} Unsupported variable kind')
@@ -115,7 +122,14 @@ fn (mut g Gen) expr(node ast.Expr) {
 			val := g.enum_vals[type_name].fields[node.val] or {
 				g.n_error('${@LOCATION} enum field not found ${node.val}')
 			}
-			g.code_gen.mov64(g.code_gen.main_reg(), val)
+			match val {
+				Number {
+					g.code_gen.mov64(g.code_gen.main_reg(), val)
+				}
+				ast.Expr {
+					g.expr(val)
+				}
+			}
 		}
 		ast.UnsafeExpr {
 			g.expr(node.expr)
@@ -148,7 +162,12 @@ fn (mut g Gen) expr(node ast.Expr) {
 			}
 		}
 		else {
-			g.n_error('${@LOCATION} expr: unhandled node type: ${node.type_name()}')
+			util.show_compiler_message('error', errors.CompilerMessage{
+				message:   'detail'
+				file_path: g.current_file.path
+				pos:       node.pos()
+			})
+			g.n_error('${@LOCATION} expr: unhandled node type: ${node.type_name()} ${node}')
 		}
 	}
 }
@@ -172,6 +191,24 @@ fn (mut g Gen) local_var_ident(ident ast.Ident, var LocalVar) {
 			}
 		}
 	}
+}
+
+fn (mut g Gen) extern_var_ident(var ExternVar) {
+	if g.pref.os == .linux {
+		main_reg := g.code_gen.main_reg()
+		g.extern_vars[g.pos()] = var.name
+		g.code_gen.mov64(main_reg, Number(i64(0)))
+		g.code_gen.mov_deref(main_reg, main_reg, ast.u64_type_idx)
+	} else if g.pref.os == .macos {
+		eprintln('## TODO, macos, extern_var_ident, var: ${var}')
+	} else {
+		g.n_error('${@LOCATION} unsupported os for ${var}')
+	}
+}
+
+fn (mut g Gen) preproc_var_ident(var PreprocVar) {
+	main_reg := g.code_gen.main_reg()
+	g.code_gen.mov64(main_reg, var.val)
 }
 
 fn (mut g Gen) condition(expr ast.Expr, neg bool) i32 {

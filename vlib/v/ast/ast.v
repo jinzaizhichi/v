@@ -117,7 +117,13 @@ pub type Stmt = AsmStmt
 	| StructDecl
 	| TypeDecl
 
-pub type ScopeObject = AsmRegister | ConstField | GlobalField | Var
+pub struct EmptyScopeObject {
+pub mut:
+	name string
+	typ  Type
+}
+
+pub type ScopeObject = EmptyScopeObject | AsmRegister | ConstField | GlobalField | Var
 
 // TODO: replace Param
 pub type Node = CallArg
@@ -209,6 +215,7 @@ pub:
 pub const empty_expr = Expr(EmptyExpr(0))
 pub const empty_stmt = Stmt(EmptyStmt{})
 pub const empty_node = Node(EmptyNode{})
+pub const empty_scope_object = ScopeObject(EmptyScopeObject{'empty_scope_object', 0})
 pub const empty_comptime_const_value = ComptTimeConstValue(EmptyExpr(0))
 
 // `{stmts}` or `unsafe {stmts}`
@@ -996,6 +1003,7 @@ pub:
 	is_test       bool // true for _test.v files
 	is_generated  bool // true for `@[generated] module xyz` files; turn off notices
 	is_translated bool // true for `@[translated] module xyz` files; turn off some checks
+	language      Language
 pub mut:
 	idx              int    // index in an external container; can be used to refer to the file in a more efficient way, just by its integer index
 	path             string // absolute path of the source file - '/projects/v/file.v'
@@ -1075,8 +1083,8 @@ pub:
 	mut_pos  token.Pos
 	comptime bool
 pub mut:
-	scope          &Scope = unsafe { nil }
-	obj            ScopeObject
+	scope          &Scope      = unsafe { nil }
+	obj            ScopeObject = empty_scope_object
 	mod            string
 	name           string
 	full_name      string
@@ -1114,7 +1122,7 @@ pub fn (i &Ident) is_auto_heap() bool {
 pub fn (i &Ident) is_mut() bool {
 	match i.obj {
 		Var { return i.obj.is_mut }
-		ConstField { return false }
+		ConstField, EmptyScopeObject { return false }
 		AsmRegister, GlobalField { return true }
 	}
 }
@@ -1570,7 +1578,7 @@ pub:
 	has_len       bool
 	has_cap       bool
 	has_init      bool
-	has_index     bool // true if temp variable index is used	
+	has_index     bool // true if temp variable index is used
 pub mut:
 	exprs        []Expr // `[expr, expr]` or `[expr]Type{}` for fixed array
 	len_expr     Expr   // len: expr
@@ -2402,7 +2410,7 @@ pub fn (node Node) pos() token.Pos {
 				ConstField, GlobalField, Var {
 					return node.pos
 				}
-				AsmRegister {
+				EmptyScopeObject, AsmRegister {
 					return token.Pos{
 						len:       -1
 						line_nr:   -1
@@ -2550,7 +2558,7 @@ pub fn (node Node) children() []Node {
 	} else if node is ScopeObject {
 		match node {
 			GlobalField, ConstField, Var { children << node.expr }
-			AsmRegister {}
+			AsmRegister, EmptyScopeObject {}
 		}
 	} else {
 		match node {
@@ -2586,10 +2594,8 @@ pub fn (mut lx IndexExpr) recursive_arraymap_set_is_setter() {
 	lx.is_setter = true
 	if mut lx.left is IndexExpr {
 		lx.left.recursive_arraymap_set_is_setter()
-	} else if mut lx.left is SelectorExpr {
-		if mut lx.left.expr is IndexExpr {
-			lx.left.expr.recursive_arraymap_set_is_setter()
-		}
+	} else if mut lx.left is SelectorExpr && lx.left.expr is IndexExpr {
+		lx.left.expr.recursive_arraymap_set_is_setter()
 	}
 }
 
@@ -2725,6 +2731,15 @@ pub fn (expr Expr) is_reference() bool {
 			false
 		}
 	}
+}
+
+// remove_par removes all parenthesis and gets the innermost Expr
+pub fn (mut expr Expr) remove_par() Expr {
+	mut e := expr
+	for mut e is ParExpr {
+		e = e.expr
+	}
+	return e
 }
 
 // is `expr` a literal, i.e. it does not depend on any other declarations (C compile time constant)
