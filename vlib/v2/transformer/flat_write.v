@@ -2052,7 +2052,7 @@ fn (mut t Transformer) transform_stmt_list_item_cursor_to_flat(c ast.Cursor, mut
 				if t.try_expand_passthrough_for_in_cursor_to_flat(c, mut ids, mut out) {
 					return
 				}
-				t.transform_stmt_list_item_to_flat(for_stmt_from_cursor(c), mut ids, mut out)
+				panic('unhandled flat for-in lowering')
 			} else {
 				id := t.transform_for_stmt_streaming_to_flat(c, mut out)
 				t.append_transformed_stmt_id_to_flat(mut ids, id, mut out)
