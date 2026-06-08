@@ -2059,7 +2059,7 @@ fn (mut g Gen) find_generic_fn_decl_for_requirements(call_name string) ?ast.FnDe
 				}
 				decl := stmt.fn_decl_signature()
 				if g.generic_fn_param_names(decl).len > 0 {
-					return decl
+					return stmt.fn_decl()
 				}
 			}
 		}
