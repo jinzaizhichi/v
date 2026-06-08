@@ -967,7 +967,7 @@ fn (mut g Gen) fn_type_alias_name_from_generic_name(name string) ?string {
 	} else {
 		return none
 	}
-	if g.find_generic_fn_decl_by_base_name(base_name) != none {
+	if g.has_generic_fn_decl_by_base_name(base_name) {
 		return none
 	}
 	return g.fn_type_alias_name_for_base_expr(ast.Ident{
@@ -3800,7 +3800,7 @@ fn (mut g Gen) try_emit_generic_fn_value(expr ast.Expr) bool {
 		g.sb.write_string(name)
 		return true
 	}
-	if _ := g.find_generic_fn_decl_by_base_name(name) {
+	if g.has_generic_fn_decl_by_base_name(name) {
 		g.sb.write_string(name)
 		return true
 	}

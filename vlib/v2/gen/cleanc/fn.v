@@ -4977,6 +4977,29 @@ fn (g &Gen) qualify_local_call_name(name string) string {
 	return name
 }
 
+fn (g &Gen) has_generic_fn_decl_by_base_name(name string) bool {
+	lookup_name := g.qualified_generic_fn_base_name(name) or { name }
+	info := g.generic_fn_decl_index[lookup_name] or { return false }
+	if g.has_flat() {
+		if info.file_idx < 0 || info.file_idx >= g.flat.files.len {
+			return false
+		}
+		stmts := g.flat.file_cursor(info.file_idx).stmts()
+		if info.stmt_idx < 0 || info.stmt_idx >= stmts.len() {
+			return false
+		}
+		return stmts.at(info.stmt_idx).kind() == .stmt_fn_decl
+	}
+	if info.file_idx < 0 || info.file_idx >= g.files.len {
+		return false
+	}
+	file := g.files[info.file_idx]
+	if info.stmt_idx < 0 || info.stmt_idx >= file.stmts.len {
+		return false
+	}
+	return file.stmts[info.stmt_idx] is ast.FnDecl
+}
+
 fn (mut g Gen) find_generic_fn_decl_by_base_name(name string) ?ast.FnDecl {
 	lookup_name := g.qualified_generic_fn_base_name(name) or { name }
 	info := g.generic_fn_decl_index[lookup_name] or { return none }
@@ -5815,7 +5838,7 @@ fn (mut g Gen) try_specialize_generic_call_name(name string, call_args []ast.Exp
 	if !name.contains('__') {
 		qualified := g.qualify_local_call_name(name)
 		if qualified != name && (qualified in g.fn_param_is_ptr || qualified in g.fn_return_types)
-			&& g.find_generic_fn_decl_by_base_name(qualified) == none {
+			&& !g.has_generic_fn_decl_by_base_name(qualified) {
 			return none
 		}
 	}
@@ -9731,8 +9754,7 @@ fn (mut g Gen) resolved_qualified_selector_method_name(method_name string) ?stri
 		method_name
 	}
 	if base_name in g.fn_return_types || base_name in g.fn_param_is_ptr
-		|| g.has_specialized_fn_base(base_name)
-		|| g.find_generic_fn_decl_by_base_name(base_name) != none {
+		|| g.has_specialized_fn_base(base_name) || g.has_generic_fn_decl_by_base_name(base_name) {
 		return method_name
 	}
 	for candidate in generic_call_decl_candidates(base_name) {
@@ -9777,7 +9799,7 @@ fn (mut g Gen) resolve_selector_module_call_name(lhs ast.SelectorExpr) ?string {
 	name := '${mod_name}__${sanitize_fn_ident(lhs.rhs.name)}'
 	if g.is_module_ident(lhs_ident.name) || name in g.fn_return_types || name in g.fn_param_is_ptr
 		|| g.is_module_local_fn(name) || g.has_specialized_fn_base(name)
-		|| g.find_generic_fn_decl_by_base_name(name) != none {
+		|| g.has_generic_fn_decl_by_base_name(name) {
 		return name
 	}
 	return none
@@ -9985,7 +10007,7 @@ fn (mut g Gen) get_call_return_type(lhs ast.Expr, call_args []ast.Expr) ?string 
 		if c_name.contains('_T_') && c_name !in g.fn_return_types && c_name !in g.fn_param_is_ptr {
 			base_name := c_name.all_before('_T_')
 			if (base_name in g.fn_return_types || base_name in g.fn_param_is_ptr)
-				&& g.find_generic_fn_decl_by_base_name(base_name) == none {
+				&& !g.has_generic_fn_decl_by_base_name(base_name) {
 				c_name = base_name
 			}
 		}
@@ -12000,7 +12022,7 @@ fn (mut g Gen) call_expr(lhs ast.Expr, args []ast.Expr) {
 	if name.contains('_T_') && name !in g.fn_return_types && name !in g.fn_param_is_ptr {
 		base_name := name.all_before('_T_')
 		if (base_name in g.fn_return_types || base_name in g.fn_param_is_ptr)
-			&& g.find_generic_fn_decl_by_base_name(base_name) == none {
+			&& !g.has_generic_fn_decl_by_base_name(base_name) {
 			name = base_name
 		}
 	}
