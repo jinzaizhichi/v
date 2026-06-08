@@ -2038,6 +2038,9 @@ fn (mut t Transformer) transform_stmt_list_item_cursor_to_flat(c ast.Cursor, mut
 			// `stmt.init is ast.ForInStmt` branch exactly.
 			init_c := c.edge(0)
 			if init_c.is_valid() && init_c.kind() == .stmt_for_in {
+				if t.try_expand_range_for_in_cursor_to_flat(c, mut ids, mut out) {
+					return
+				}
 				if t.try_expand_for_in_map_cursor_to_flat(c, mut ids, mut out) {
 					return
 				}
@@ -3585,6 +3588,58 @@ pub fn (mut t Transformer) try_expand_for_in_map_to_flat(stmt ast.ForStmt, mut i
 	}
 	t.append_transformed_stmt_to_flat(mut ids, for_stmt, mut out)
 
+	return true
+}
+
+fn (mut t Transformer) try_expand_range_for_in_cursor_to_flat(stmt ast.Cursor, mut ids []ast.FlatNodeId, mut out ast.FlatBuilder) bool {
+	for_in_c := stmt.edge(0)
+	if !for_in_c.is_valid() || for_in_c.kind() != .stmt_for_in {
+		return false
+	}
+	range_expr := for_in_c.edge(2).expr()
+	if range_expr !is ast.RangeExpr {
+		return false
+	}
+	range := range_expr as ast.RangeExpr
+	mut value_name := for_in_cursor_var_name(for_in_c.edge(1))
+	if value_name == '' {
+		value_name = '_i'
+	}
+
+	t.open_scope()
+	if int_obj := t.scope.lookup_parent('int', 0) {
+		t.register_for_in_var_type(value_name, int_obj.typ())
+	}
+	body_ids := t.transform_cursor_stmts_to_flat_direct(stmt.for_body_list(), [], mut out)
+
+	cmp_op := if range.op == .ellipsis { token.Token.le } else { token.Token.lt }
+	start_expr := t.strip_pos(t.transform_expr(range.start))
+	end_expr := t.strip_pos(t.transform_expr(range.end))
+	range_cond := t.make_infix_expr(cmp_op, ast.Expr(ast.Ident{
+		name: value_name
+	}), end_expr)
+	t.close_scope()
+
+	init_id := out.emit_stmt(ast.AssignStmt{
+		op:  .decl_assign
+		lhs: [ast.Expr(ast.Ident{
+			name: value_name
+		})]
+		rhs: [start_expr]
+	})
+	cond_id := out.emit_expr(range_cond)
+	post_id := out.emit_stmt(ast.AssignStmt{
+		op:  .plus_assign
+		lhs: [ast.Expr(ast.Ident{
+			name: value_name
+		})]
+		rhs: [ast.Expr(ast.BasicLiteral{
+			value: '1'
+			kind:  .number
+		})]
+	})
+	id := out.emit_for_stmt_by_ids(init_id, cond_id, post_id, body_ids)
+	t.append_transformed_stmt_id_to_flat(mut ids, id, mut out)
 	return true
 }
 
