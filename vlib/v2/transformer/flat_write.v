@@ -2038,6 +2038,9 @@ fn (mut t Transformer) transform_stmt_list_item_cursor_to_flat(c ast.Cursor, mut
 			// `stmt.init is ast.ForInStmt` branch exactly.
 			init_c := c.edge(0)
 			if init_c.is_valid() && init_c.kind() == .stmt_for_in {
+				if t.try_expand_for_in_map_cursor_to_flat(c, mut ids, mut out) {
+					return
+				}
 				t.transform_stmt_list_item_to_flat(for_stmt_from_cursor(c), mut ids, mut out)
 			} else {
 				id := t.transform_for_stmt_streaming_to_flat(c, mut out)
@@ -2204,6 +2207,22 @@ fn for_in_stmt_from_cursor(c ast.Cursor) ast.ForInStmt {
 		value: c.edge(1).expr()
 		expr:  c.edge(2).expr()
 	}
+}
+
+fn for_in_cursor_var_name(c ast.Cursor) string {
+	if !c.is_valid() {
+		return ''
+	}
+	if c.kind() == .expr_ident {
+		return c.name()
+	}
+	if c.kind() == .expr_modifier {
+		inner := c.edge(0)
+		if inner.is_valid() && inner.kind() == .expr_ident {
+			return inner.name()
+		}
+	}
+	return ''
 }
 
 fn for_stmt_from_cursor(c ast.Cursor) ast.ForStmt {
@@ -3565,6 +3584,270 @@ pub fn (mut t Transformer) try_expand_for_in_map_to_flat(stmt ast.ForStmt, mut i
 		stmts: loop_body
 	}
 	t.append_transformed_stmt_to_flat(mut ids, for_stmt, mut out)
+
+	return true
+}
+
+fn (mut t Transformer) try_expand_for_in_map_cursor_to_flat(stmt ast.Cursor, mut ids []ast.FlatNodeId, mut out ast.FlatBuilder) bool {
+	if t.is_eval_backend() {
+		return false
+	}
+	for_in_c := stmt.edge(0)
+	if !for_in_c.is_valid() || for_in_c.kind() != .stmt_for_in {
+		return false
+	}
+	iter_expr_c := for_in_c.edge(2)
+	for_in_expr := iter_expr_c.expr()
+	iter_type := t.get_expr_type(for_in_expr) or { return false }
+	map_type := t.unwrap_map_type(iter_type) or { return false }
+
+	key_name := for_in_cursor_var_name(for_in_c.edge(0))
+	key_is_blank := key_name == '_'
+	value_name := for_in_cursor_var_name(for_in_c.edge(1))
+
+	key_type_name := t.type_to_c_decl_name(map_type.key_type)
+	value_type_name := t.type_to_c_decl_name(map_type.value_type)
+
+	idx_name := t.gen_map_iter_temp_name('idx')
+	len_name := t.gen_map_iter_temp_name('len')
+	delta_name := t.gen_map_iter_temp_name('delta')
+
+	idx_ident := ast.Ident{
+		name: idx_name
+	}
+	len_ident := ast.Ident{
+		name: len_name
+	}
+	delta_ident := ast.Ident{
+		name: delta_name
+	}
+
+	smartcast_iter_expr := t.expr_to_string(for_in_expr)
+	is_smartcast_iter := smartcast_iter_expr != ''
+		&& t.find_smartcast_for_expr(smartcast_iter_expr) != none
+	is_lvalue := !is_smartcast_iter && iter_expr_c.kind() in [.expr_ident, .expr_selector]
+	mut map_ref := ast.Expr(ast.Ident{})
+	if is_lvalue {
+		map_ref = for_in_expr
+	} else {
+		map_tmp_name := t.gen_map_iter_temp_name('map')
+		map_tmp_ident := ast.Ident{
+			name: map_tmp_name
+		}
+		map_source := if is_smartcast_iter {
+			t.smartcast_map_iter_value_expr(for_in_expr, map_type)
+		} else {
+			for_in_expr
+		}
+		t.append_transformed_stmt_to_flat(mut ids, ast.AssignStmt{
+			op:  .decl_assign
+			lhs: [ast.Expr(map_tmp_ident)]
+			rhs: [map_source]
+		}, mut out)
+		t.register_temp_var(map_tmp_name, iter_type)
+		map_ref = ast.Expr(map_tmp_ident)
+	}
+
+	key_values_expr := t.synth_selector(map_ref, 'key_values', types.Type(types.Struct{
+		name: 'DenseArray'
+	}))
+
+	key_values_len_expr := t.synth_selector(ast.Expr(key_values_expr), 'len',
+		types.Type(types.int_))
+
+	t.append_transformed_stmt_to_flat(mut ids, ast.AssignStmt{
+		op:  .decl_assign
+		lhs: [ast.Expr(ast.ModifierExpr{
+			kind: .key_mut
+			expr: len_ident
+		})]
+		rhs: [ast.Expr(key_values_len_expr)]
+	}, mut out)
+
+	mut loop_prefix := []ast.Stmt{}
+
+	loop_prefix << ast.AssignStmt{
+		op:  .decl_assign
+		lhs: [ast.Expr(delta_ident)]
+		rhs: [t.make_infix_expr(.minus, key_values_len_expr, ast.Expr(len_ident))]
+	}
+
+	loop_prefix << ast.AssignStmt{
+		op:  .assign
+		lhs: [ast.Expr(len_ident)]
+		rhs: [key_values_len_expr]
+	}
+
+	delta_lt_zero := t.make_infix_expr(.lt, ast.Expr(delta_ident), t.make_number_expr('0'))
+	loop_prefix << ast.ExprStmt{
+		expr: ast.IfExpr{
+			cond:  delta_lt_zero
+			stmts: [
+				ast.Stmt(ast.AssignStmt{
+					op:  .assign
+					lhs: [ast.Expr(idx_ident)]
+					rhs: [
+						ast.Expr(ast.PrefixExpr{
+							op:   .minus
+							expr: ast.BasicLiteral{
+								kind:  .number
+								value: '1'
+							}
+						}),
+					]
+				}),
+				ast.Stmt(ast.FlowControlStmt{
+					op: .key_continue
+				}),
+			]
+		}
+	}
+
+	has_index_call := ast.CallExpr{
+		lhs:  ast.Ident{
+			name: 'DenseArray__has_index'
+		}
+		args: [
+			ast.Expr(ast.PrefixExpr{
+				op:   .amp
+				expr: key_values_expr
+			}),
+			ast.Expr(idx_ident),
+		]
+	}
+	loop_prefix << ast.ExprStmt{
+		expr: ast.IfExpr{
+			cond:  ast.PrefixExpr{
+				op:   .not
+				expr: has_index_call
+			}
+			stmts: [ast.Stmt(ast.FlowControlStmt{
+				op: .key_continue
+			})]
+		}
+	}
+
+	if !key_is_blank && key_name != '' {
+		key_call := ast.CallExpr{
+			lhs:  ast.Ident{
+				name: 'DenseArray__key'
+			}
+			args: [
+				ast.Expr(ast.PrefixExpr{
+					op:   .amp
+					expr: key_values_expr
+				}),
+				ast.Expr(idx_ident),
+			]
+		}
+		key_cast := ast.CastExpr{
+			typ:  ast.Ident{
+				name: '${key_type_name}*'
+			}
+			expr: key_call
+		}
+		key_deref := ast.PrefixExpr{
+			op:   .mul
+			expr: key_cast
+		}
+		loop_prefix << ast.AssignStmt{
+			op:  .decl_assign
+			lhs: [ast.Expr(ast.Ident{
+				name: key_name
+			})]
+			rhs: [ast.Expr(key_deref)]
+		}
+		if map_type.key_type is types.String {
+			loop_prefix << ast.AssignStmt{
+				op:  .assign
+				lhs: [ast.Expr(ast.Ident{
+					name: key_name
+				})]
+				rhs: [
+					ast.Expr(ast.CallExpr{
+						lhs:  ast.Ident{
+							name: 'string__clone'
+						}
+						args: [ast.Expr(ast.Ident{
+							name: key_name
+						})]
+					}),
+				]
+			}
+		}
+		t.register_for_in_var_type(key_name, map_type.key_type)
+	}
+
+	if value_name != '' && value_name != '_' {
+		value_call := ast.CallExpr{
+			lhs:  ast.Ident{
+				name: 'DenseArray__value'
+			}
+			args: [
+				ast.Expr(ast.PrefixExpr{
+					op:   .amp
+					expr: key_values_expr
+				}),
+				ast.Expr(idx_ident),
+			]
+		}
+		value_cast := ast.CastExpr{
+			typ:  ast.Ident{
+				name: '${value_type_name}*'
+			}
+			expr: value_call
+		}
+		value_deref := ast.PrefixExpr{
+			op:   .mul
+			expr: value_cast
+		}
+		loop_prefix << ast.AssignStmt{
+			op:  .decl_assign
+			lhs: [ast.Expr(ast.Ident{
+				name: value_name
+			})]
+			rhs: [ast.Expr(value_deref)]
+		}
+		t.register_for_in_var_type(value_name, map_type.value_type)
+	}
+
+	loop_cond := t.make_infix_expr(.lt, ast.Expr(idx_ident), ast.Expr(len_ident))
+	next_idx := t.make_infix_expr(.plus, ast.Expr(idx_ident), t.make_number_expr('1'))
+
+	t.open_scope()
+	mut loop_smartcasts := []SmartcastContext{}
+	for term in t.flatten_and_terms_unwrapped(loop_cond) {
+		if term is ast.InfixExpr {
+			if ctx := t.smartcast_context_from_condition_term(term) {
+				loop_smartcasts << ctx
+			}
+		}
+	}
+	for ctx in loop_smartcasts {
+		t.push_smartcast_full(ctx.expr, ctx.variant, ctx.variant_full, ctx.sumtype)
+	}
+	mut stmt_ids := t.transform_stmts_to_flat_direct(loop_prefix, mut out)
+	stmt_ids << t.transform_cursor_stmts_to_flat_direct(stmt.for_body_list(), [], mut out)
+	for _ in loop_smartcasts {
+		t.pop_smartcast()
+	}
+	init_id := t.transform_stmt_to_flat(ast.AssignStmt{
+		op:  .decl_assign
+		lhs: [ast.Expr(idx_ident)]
+		rhs: [ast.Expr(ast.BasicLiteral{
+			kind:  .number
+			value: '0'
+		})]
+	}, mut out)
+	cond_id := t.transform_expr_to_flat(loop_cond, mut out)
+	post_id := t.transform_stmt_to_flat(ast.AssignStmt{
+		op:  .assign
+		lhs: [ast.Expr(idx_ident)]
+		rhs: [next_idx]
+	}, mut out)
+	t.close_scope()
+	id := out.emit_for_stmt_by_ids(init_id, cond_id, post_id, stmt_ids)
+	t.append_transformed_stmt_id_to_flat(mut ids, id, mut out)
 
 	return true
 }
