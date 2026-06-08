@@ -2049,6 +2049,9 @@ fn (mut t Transformer) transform_stmt_list_item_cursor_to_flat(c ast.Cursor, mut
 				if t.try_expand_untyped_for_in_cursor_to_flat(c, mut ids, mut out) {
 					return
 				}
+				if t.try_expand_passthrough_for_in_cursor_to_flat(c, mut ids, mut out) {
+					return
+				}
 				t.transform_stmt_list_item_to_flat(for_stmt_from_cursor(c), mut ids, mut out)
 			} else {
 				id := t.transform_for_stmt_streaming_to_flat(c, mut out)
@@ -4016,6 +4019,41 @@ fn (mut t Transformer) emit_untyped_for_in_cursor_to_flat(stmt ast.Cursor, for_i
 	})
 	id := out.emit_for_stmt_by_ids(init_id, cond_id, post_id, body_ids)
 	t.append_transformed_stmt_id_to_flat(mut ids, id, mut out)
+}
+
+fn (mut t Transformer) try_expand_passthrough_for_in_cursor_to_flat(stmt ast.Cursor, mut ids []ast.FlatNodeId, mut out ast.FlatBuilder) bool {
+	for_in_c := stmt.edge(0)
+	if !for_in_c.is_valid() || for_in_c.kind() != .stmt_for_in {
+		return false
+	}
+	iter_expr := for_in_c.edge(2).expr()
+	iter_type := t.for_in_iter_expr_type(iter_expr) or { return false }
+	if t.is_native_be {
+		return false
+	}
+
+	t.open_scope()
+	value_name := for_in_cursor_var_name(for_in_c.edge(1))
+	if value_name != '' && value_name != '_' {
+		t.register_for_in_var_type(value_name, t.for_in_value_type(iter_type))
+	}
+	key_name := for_in_cursor_var_name(for_in_c.edge(0))
+	if key_name != '' && key_name != '_' {
+		t.register_for_in_var_type(key_name, iter_type.key_type())
+	}
+
+	body_ids := t.transform_cursor_stmts_to_flat_direct(stmt.for_body_list(), [], mut out)
+	init_id := out.emit_stmt(ast.ForInStmt{
+		key:   for_in_c.edge(0).expr()
+		value: for_in_c.edge(1).expr()
+		expr:  t.transform_expr(iter_expr)
+	})
+	cond_id := t.transform_expr_to_flat(stmt.edge(1).expr(), mut out)
+	post_id := t.transform_stmt_cursor_to_flat(stmt.edge(2), mut out)
+	t.close_scope()
+	id := out.emit_for_stmt_by_ids(init_id, cond_id, post_id, body_ids)
+	t.append_transformed_stmt_id_to_flat(mut ids, id, mut out)
+	return true
 }
 
 fn (mut t Transformer) try_expand_for_in_map_cursor_to_flat(stmt ast.Cursor, mut ids []ast.FlatNodeId, mut out ast.FlatBuilder) bool {
