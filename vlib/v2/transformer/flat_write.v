@@ -2046,6 +2046,9 @@ fn (mut t Transformer) transform_stmt_list_item_cursor_to_flat(c ast.Cursor, mut
 				if t.try_expand_for_in_map_cursor_to_flat(c, mut ids, mut out) {
 					return
 				}
+				if t.try_expand_untyped_for_in_cursor_to_flat(c, mut ids, mut out) {
+					return
+				}
 				t.transform_stmt_list_item_to_flat(for_stmt_from_cursor(c), mut ids, mut out)
 			} else {
 				id := t.transform_for_stmt_streaming_to_flat(c, mut out)
@@ -3879,6 +3882,114 @@ fn (mut t Transformer) emit_array_for_in_cursor_to_flat(stmt ast.Cursor, for_in_
 	} else {
 		t.generic_var_type_params.delete(value_name)
 	}
+	body_pending := t.pending_stmts
+	t.pending_stmts = []ast.Stmt{}
+	t.pending_stmts << iter_pending
+	t.pending_stmts << body_pending
+
+	loop_cond := t.make_infix_expr(.lt, ast.Expr(key_ident), t.synth_selector(transformed_expr,
+		'len', types.Type(types.int_)))
+	init_id := out.emit_stmt(ast.AssignStmt{
+		op:  .decl_assign
+		lhs: [ast.Expr(key_ident)]
+		rhs: [ast.Expr(ast.BasicLiteral{
+			value: '0'
+			kind:  .number
+		})]
+	})
+	cond_id := out.emit_expr(loop_cond)
+	post_id := out.emit_stmt(ast.AssignStmt{
+		op:  .plus_assign
+		lhs: [ast.Expr(key_ident)]
+		rhs: [ast.Expr(ast.BasicLiteral{
+			value: '1'
+			kind:  .number
+		})]
+	})
+	id := out.emit_for_stmt_by_ids(init_id, cond_id, post_id, body_ids)
+	t.append_transformed_stmt_id_to_flat(mut ids, id, mut out)
+}
+
+fn (mut t Transformer) try_expand_untyped_for_in_cursor_to_flat(stmt ast.Cursor, mut ids []ast.FlatNodeId, mut out ast.FlatBuilder) bool {
+	for_in_c := stmt.edge(0)
+	if !for_in_c.is_valid() || for_in_c.kind() != .stmt_for_in {
+		return false
+	}
+	iter_expr := for_in_c.edge(2).expr()
+	if _ := t.for_in_iter_expr_type(iter_expr) {
+		if !t.is_native_be {
+			return false
+		}
+	}
+
+	t.open_scope()
+	t.emit_untyped_for_in_cursor_to_flat(stmt, for_in_c, iter_expr, mut ids, mut out)
+	t.close_scope()
+	return true
+}
+
+fn (mut t Transformer) emit_untyped_for_in_cursor_to_flat(stmt ast.Cursor, for_in_c ast.Cursor, iter_expr ast.Expr, mut ids []ast.FlatNodeId, mut out ast.FlatBuilder) {
+	value_name, value_lhs, is_mut_value := for_in_cursor_binding(for_in_c.edge(1), '_elem')
+	key_name := for_in_cursor_index_name(for_in_c.edge(0), value_name)
+
+	idx_pos := t.next_synth_pos()
+	key_ident := ast.Ident{
+		name: key_name
+		pos:  idx_pos
+	}
+	if int_obj := t.scope.lookup_parent('int', 0) {
+		int_type := int_obj.typ()
+		t.register_for_in_var_type(key_name, int_type)
+		t.register_synth_type(idx_pos, int_type)
+	}
+
+	iter_typ := t.get_expr_type(iter_expr)
+	iter_pos := t.next_synth_pos()
+	transformed_expr := ast.Expr(ast.ParenExpr{
+		expr: t.transform_expr(iter_expr)
+		pos:  iter_pos
+	})
+	if typ := iter_typ {
+		t.register_synth_type(iter_pos, typ)
+	}
+	iter_pending := t.pending_stmts
+	t.pending_stmts = []ast.Stmt{}
+
+	value_expr := for_in_c.edge(1).expr()
+	index_pos := t.next_synth_pos()
+	if typ := t.get_expr_type(value_expr) {
+		t.register_synth_type(index_pos, typ)
+	}
+
+	index_expr := ast.Expr(ast.IndexExpr{
+		lhs:  transformed_expr
+		expr: key_ident
+		pos:  index_pos
+	})
+	value_rhs := if is_mut_value {
+		ptr_pos := t.next_synth_pos()
+		if typ := t.get_expr_type(value_expr) {
+			t.register_synth_type(ptr_pos, types.Type(types.Pointer{
+				base_type: typ
+			}))
+		}
+		ast.Expr(ast.PrefixExpr{
+			op:   .amp
+			expr: index_expr
+			pos:  ptr_pos
+		})
+	} else {
+		index_expr
+	}
+	value_assign := ast.AssignStmt{
+		op:  .decl_assign
+		lhs: [value_lhs]
+		rhs: [value_rhs]
+	}
+
+	mut body_ids := []ast.FlatNodeId{cap: stmt.for_body_list().len() + 1}
+	body_ids << out.emit_stmt(value_assign)
+	body_ids << t.transform_cursor_stmts_to_flat_direct(stmt.for_body_list(), [], mut out)
 	body_pending := t.pending_stmts
 	t.pending_stmts = []ast.Stmt{}
 	t.pending_stmts << iter_pending
