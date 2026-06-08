@@ -1093,7 +1093,7 @@ fn (mut g Gen) generic_call_decl_from_lhs(lhs ast.Expr) ?ast.FnDecl {
 				}
 				decl := stmt.fn_decl_signature()
 				if g.generic_fn_param_names(decl).len > 0 {
-					return stmt.fn_decl()
+					return decl
 				}
 			}
 		}
