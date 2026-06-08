@@ -188,8 +188,108 @@ fn freestanding_restricted_call_in_stmts(stmts []ast.Stmt, ctx FreestandingScanC
 
 fn freestanding_restricted_call_in_cursor_stmts(stmts ast.CursorList, ctx FreestandingScanContext) string {
 	for i in 0 .. stmts.len() {
-		stmt := stmts.at(i).stmt()
-		call_name := freestanding_restricted_call_in_stmt(stmt, ctx)
+		call_name := freestanding_restricted_call_in_cursor_stmt(stmts.at(i), ctx)
+		if call_name != '' {
+			return call_name
+		}
+	}
+	return ''
+}
+
+fn freestanding_restricted_call_in_cursor_stmt(stmt ast.Cursor, ctx FreestandingScanContext) string {
+	if !stmt.is_valid() {
+		return ''
+	}
+	return match stmt.kind() {
+		.stmt_assert {
+			expr_call :=
+				freestanding_restricted_call_in_cursor_edges(stmt, 0, stmt.edge_count(), ctx)
+			if expr_call != '' {
+				expr_call
+			} else {
+				'assert'
+			}
+		}
+		.stmt_assign {
+			freestanding_restricted_call_in_cursor_edges(stmt, 0, stmt.edge_count(), ctx)
+		}
+		.stmt_block, .stmt_defer {
+			freestanding_restricted_call_in_cursor_stmt_edges(stmt, 0, stmt.edge_count(), ctx)
+		}
+		.stmt_comptime {
+			freestanding_restricted_call_in_cursor_stmt(stmt.edge(0), ctx)
+		}
+		.stmt_const_decl {
+			freestanding_restricted_call_in_cursor_field_inits(stmt.list_at(0), ctx)
+		}
+		.stmt_expr {
+			freestanding_restricted_call_in_cursor_expr(stmt.edge(0), ctx)
+		}
+		.stmt_fn_decl {
+			attributes := stmt.list_at(2).attributes()
+			if freestanding_attributes_are_inactive(attributes, ctx) {
+				''
+			} else if attributes.has('live') {
+				'live'
+			} else {
+				freestanding_restricted_call_in_cursor_stmts(stmt.list_at(3), ctx)
+			}
+		}
+		.stmt_for_in {
+			freestanding_restricted_call_in_cursor_edges(stmt, 0, stmt.edge_count(), ctx)
+		}
+		.stmt_for {
+			init_call := freestanding_restricted_call_in_cursor_stmt(stmt.edge(0), ctx)
+			if init_call != '' {
+				init_call
+			} else {
+				cond_call := freestanding_restricted_call_in_cursor_expr(stmt.edge(1), ctx)
+				if cond_call != '' {
+					cond_call
+				} else {
+					post_call := freestanding_restricted_call_in_cursor_stmt(stmt.edge(2), ctx)
+					if post_call != '' {
+						post_call
+					} else {
+						freestanding_restricted_call_in_cursor_stmts(stmt.for_body_list(), ctx)
+					}
+				}
+			}
+		}
+		.stmt_global_decl {
+			freestanding_restricted_call_in_cursor_field_decls(stmt.list_at(1), ctx)
+		}
+		.stmt_interface_decl {
+			freestanding_restricted_call_in_cursor_field_decls(stmt.list_at(3), ctx)
+		}
+		.stmt_label {
+			freestanding_restricted_call_in_cursor_stmt(stmt.edge(0), ctx)
+		}
+		.stmt_return {
+			freestanding_restricted_call_in_cursor_edges(stmt, 0, stmt.edge_count(), ctx)
+		}
+		.stmt_struct_decl {
+			freestanding_restricted_call_in_cursor_field_decls(stmt.list_at(4), ctx)
+		}
+		else {
+			''
+		}
+	}
+}
+
+fn freestanding_restricted_call_in_cursor_stmt_edges(stmt ast.Cursor, start int, end int, ctx FreestandingScanContext) string {
+	for i in start .. end {
+		call_name := freestanding_restricted_call_in_cursor_stmt(stmt.edge(i), ctx)
+		if call_name != '' {
+			return call_name
+		}
+	}
+	return ''
+}
+
+fn freestanding_restricted_call_in_cursor_edges(expr_parent ast.Cursor, start int, end int, ctx FreestandingScanContext) string {
+	for i in start .. end {
+		call_name := freestanding_restricted_call_in_cursor_expr(expr_parent.edge(i), ctx)
 		if call_name != '' {
 			return call_name
 		}
@@ -291,11 +391,36 @@ fn freestanding_restricted_call_in_exprs(exprs []ast.Expr, ctx FreestandingScanC
 	return ''
 }
 
+fn freestanding_restricted_call_in_cursor_field_inits(fields ast.CursorList, ctx FreestandingScanContext) string {
+	for i in 0 .. fields.len() {
+		call_name := freestanding_restricted_call_in_cursor_expr(fields.at(i).edge(0), ctx)
+		if call_name != '' {
+			return call_name
+		}
+	}
+	return ''
+}
+
 fn freestanding_restricted_call_in_field_inits(fields []ast.FieldInit, ctx FreestandingScanContext) string {
 	for field in fields {
 		call_name := freestanding_restricted_call_in_expr(field.value, ctx)
 		if call_name != '' {
 			return call_name
+		}
+	}
+	return ''
+}
+
+fn freestanding_restricted_call_in_cursor_field_decls(fields ast.CursorList, ctx FreestandingScanContext) string {
+	for i in 0 .. fields.len() {
+		field := fields.at(i)
+		typ_call := freestanding_restricted_call_in_cursor_expr(field.edge(0), ctx)
+		if typ_call != '' {
+			return typ_call
+		}
+		value_call := freestanding_restricted_call_in_cursor_expr(field.edge(1), ctx)
+		if value_call != '' {
+			return value_call
 		}
 	}
 	return ''
@@ -313,6 +438,13 @@ fn freestanding_restricted_call_in_field_decls(fields []ast.FieldDecl, ctx Frees
 		}
 	}
 	return ''
+}
+
+fn freestanding_restricted_call_in_cursor_expr(expr ast.Cursor, ctx FreestandingScanContext) string {
+	if !expr.is_valid() {
+		return ''
+	}
+	return freestanding_restricted_call_in_expr(expr.expr(), ctx)
 }
 
 fn freestanding_restricted_call_in_expr(expr ast.Expr, ctx FreestandingScanContext) string {
