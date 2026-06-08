@@ -2041,6 +2041,9 @@ fn (mut t Transformer) transform_stmt_list_item_cursor_to_flat(c ast.Cursor, mut
 				if t.try_expand_range_for_in_cursor_to_flat(c, mut ids, mut out) {
 					return
 				}
+				if t.try_expand_fixed_array_for_in_cursor_to_flat(c, mut ids, mut out) {
+					return
+				}
 				if t.try_expand_for_in_map_cursor_to_flat(c, mut ids, mut out) {
 					return
 				}
@@ -3638,6 +3641,51 @@ fn (mut t Transformer) try_expand_range_for_in_cursor_to_flat(stmt ast.Cursor, m
 			kind:  .number
 		})]
 	})
+	id := out.emit_for_stmt_by_ids(init_id, cond_id, post_id, body_ids)
+	t.append_transformed_stmt_id_to_flat(mut ids, id, mut out)
+	return true
+}
+
+fn (mut t Transformer) try_expand_fixed_array_for_in_cursor_to_flat(stmt ast.Cursor, mut ids []ast.FlatNodeId, mut out ast.FlatBuilder) bool {
+	for_in_c := stmt.edge(0)
+	if !for_in_c.is_valid() || for_in_c.kind() != .stmt_for_in {
+		return false
+	}
+	for_in := for_in_stmt_from_cursor(for_in_c)
+	iter_type := t.for_in_iter_expr_type(for_in.expr) or { return false }
+	mut iter_base_type := iter_type
+	for {
+		if iter_base_type is types.Pointer {
+			ptr := iter_base_type as types.Pointer
+			iter_base_type = ptr.base_type
+			continue
+		}
+		if iter_base_type is types.Alias {
+			alias_t := iter_base_type as types.Alias
+			iter_base_type = alias_t.base_type
+			continue
+		}
+		break
+	}
+	if iter_base_type !is types.ArrayFixed {
+		return false
+	}
+	arr_fixed := iter_base_type as types.ArrayFixed
+
+	t.open_scope()
+	lowered := t.transform_fixed_array_for_in(ast.ForStmt{
+		init: ast.Stmt(for_in)
+	}, for_in, arr_fixed)
+	mut body_ids := []ast.FlatNodeId{cap: lowered.stmts.len + stmt.for_body_list().len()}
+	for s in lowered.stmts {
+		body_ids << out.emit_stmt(s)
+	}
+	body_ids << t.transform_cursor_stmts_to_flat_direct(stmt.for_body_list(), [], mut out)
+	t.close_scope()
+
+	init_id := out.emit_stmt(lowered.init)
+	cond_id := out.emit_expr(lowered.cond)
+	post_id := out.emit_stmt(lowered.post)
 	id := out.emit_for_stmt_by_ids(init_id, cond_id, post_id, body_ids)
 	t.append_transformed_stmt_id_to_flat(mut ids, id, mut out)
 	return true
