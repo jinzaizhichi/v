@@ -1861,7 +1861,7 @@ fn (mut g Gen) call_cursor_lhs_is_generic_call(lhs ast.Cursor) bool {
 		return false
 	}
 	if g.generic_fn_decl_index.len == 0 {
-		if _ := g.generic_call_decl_from_lhs(lhs.expr()) {
+		if _ := g.generic_call_decl_from_lhs_cursor(lhs) {
 			return true
 		}
 		return false
@@ -2940,6 +2940,23 @@ fn generic_wrapped_ident_name(expr ast.Expr) string {
 		}
 		ast.ParenExpr {
 			return generic_wrapped_ident_name(expr.expr)
+		}
+		else {}
+	}
+
+	return ''
+}
+
+fn generic_wrapped_ident_name_cursor(expr ast.Cursor) string {
+	if !expr.is_valid() {
+		return ''
+	}
+	match expr.kind() {
+		.expr_ident {
+			return expr.name()
+		}
+		.expr_modifier, .expr_paren {
+			return generic_wrapped_ident_name_cursor(expr.edge(0))
 		}
 		else {}
 	}
