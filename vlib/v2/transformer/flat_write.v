@@ -3248,10 +3248,27 @@ fn (t &Transformer) receiver_method_cursor_can_transform_direct(receiver ast.Cur
 	}
 	recv_type := t.get_expr_type_cursor(receiver) or { return false }
 	base := t.unwrap_alias_and_pointer_type(recv_type)
-	if base !is types.Struct {
+	if base is types.Struct {
+		return t.type_has_cached_method(base, method_name)
+	}
+	// Non-struct receivers. Methods with transformer-level expansions
+	// (hoisted loops) and dynamic-dispatch receivers stay on the legacy
+	// pipeline; the rest resolve to a plain method fn by name.
+	if method_name in ['filter', 'map', 'any', 'count', 'wait'] {
 		return false
 	}
-	return t.type_has_cached_method(base, method_name)
+	if base is types.Interface || base is types.SumType {
+		return false
+	}
+	// Alias receiver with its own declared method (e.g. strings.Builder.writeln).
+	if t.resolve_alias_receiver_method_name(recv_type, method_name) != none {
+		return true
+	}
+	// Plain string methods (string__starts_with etc.).
+	if t.type_is_string(recv_type) {
+		return t.lookup_method_cached('string', method_name) != none
+	}
+	return false
 }
 
 fn (t &Transformer) call_selector_method_name_can_transform_direct(c ast.Cursor) ?string {
