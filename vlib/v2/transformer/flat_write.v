@@ -3052,9 +3052,10 @@ fn (mut t Transformer) try_transform_array_append_cursor_to_flat(c ast.Cursor, m
 	if elem_type_name.starts_with('Array_') || elem_type_name == 'array' {
 		return none
 	}
-	if t.is_sum_type(elem_type_name) || t.sumtype_pointer_base(elem_type_name) != '' {
+	if t.sumtype_pointer_base(elem_type_name) != '' {
 		return none
 	}
+	elem_is_sumtype := t.is_sum_type(elem_type_name)
 	if rhs.kind() == .expr_selector {
 		rhs_lhs := rhs.edge(0)
 		if !rhs_lhs.is_valid() || rhs_lhs.kind() == .expr_empty {
@@ -3103,6 +3104,28 @@ fn (mut t Transformer) try_transform_array_append_cursor_to_flat(c ast.Cursor, m
 			if rhs_scope_base is types.Array || rhs_scope_base is types.ArrayFixed {
 				return none
 			}
+		}
+	}
+	if elem_is_sumtype {
+		// Only the no-wrap case streams: when the pushed value's checker type
+		// IS the sum type, wrap_array_push_elem_value provably returns it
+		// unchanged (for hoisted call values the legacy path wraps the
+		// `_ap_tN` temp ident, whose registered type is the sum type — same
+		// no-op). Variant-typed values that need the sumtype init wrap keep
+		// the legacy path, as do smartcast scopes.
+		if t.has_active_smartcast() {
+			return none
+		}
+		if !t.is_same_sumtype_name(t.type_to_c_name(rhs_typ), elem_type_name) {
+			return none
+		}
+		if rhs.kind() == .expr_ident {
+			rhs_scope_typ := t.lookup_var_type(rhs.name()) or { return none }
+			if !t.is_same_sumtype_name(t.type_to_c_name(rhs_scope_typ), elem_type_name) {
+				return none
+			}
+		} else if rhs.kind() != .expr_selector && !t.contains_call_expr_cursor(rhs) {
+			return none
 		}
 	}
 	// Emission mirrors the legacy tree shape and evaluation order exactly
