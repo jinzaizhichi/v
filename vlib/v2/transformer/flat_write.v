@@ -2193,6 +2193,15 @@ pub fn (mut t Transformer) append_transformed_stmt_to_flat(mut ids []ast.FlatNod
 // cursor-native stmt arms (transform_stmt_list_item_cursor_to_flat) so both
 // drain pending side effects identically.
 fn (mut t Transformer) append_transformed_stmt_id_to_flat(mut ids []ast.FlatNodeId, id ast.FlatNodeId, mut out ast.FlatBuilder) {
+	// Flat-side hoists drain first: arms that push pending_flat_stmt_ids
+	// flush the legacy pending_stmts queue into it beforehand, so emitting
+	// the flat queue first preserves the legacy chronological order.
+	if t.pending_flat_stmt_ids.len > 0 {
+		for fid in t.pending_flat_stmt_ids {
+			ids << fid
+		}
+		t.pending_flat_stmt_ids.clear()
+	}
 	if t.pending_stmts.len > 0 {
 		pending := t.pending_stmts.clone()
 		t.pending_stmts.clear()
@@ -3062,15 +3071,31 @@ fn (mut t Transformer) try_transform_array_append_cursor_to_flat(c ast.Cursor, m
 			return none
 		}
 	}
-	if t.contains_call_expr_cursor(rhs) {
-		return none
-	}
 	rhs_typ := t.get_expr_type_cursor(rhs) or { return none }
 	rhs_base := t.unwrap_alias_and_pointer_type(rhs_typ)
-	if rhs_base is types.Array || rhs_base is types.ArrayFixed {
+	mut push_many := false
+	if rhs_base is types.Array {
+		// push_many candidate: only ident rhs whose scope type agrees and
+		// whose elem type is push-compatible with the lhs elem (mirrors
+		// append_rhs_is_array_value_compatible via get_array_elem_type_str's
+		// ident branch). Everything else keeps the legacy path.
+		if rhs.kind() != .expr_ident {
+			return none
+		}
+		rhs_scope_typ := t.lookup_var_type(rhs.name()) or { return none }
+		rhs_scope_base := t.unwrap_alias_and_pointer_type(rhs_scope_typ)
+		if rhs_scope_base !is types.Array {
+			return none
+		}
+		rhs_arr := rhs_scope_base as types.Array
+		rhs_elem := t.normalize_literal_type(t.array_elem_type_name_for_helpers(rhs_arr.elem_type))
+		if !t.array_elem_types_compatible(elem_type_name, rhs_elem) {
+			return none
+		}
+		push_many = true
+	} else if rhs_base is types.ArrayFixed {
 		return none
-	}
-	if rhs.kind() == .expr_ident {
+	} else if rhs.kind() == .expr_ident {
 		// The legacy rhs analysis consults the scope before the checker env;
 		// require both to agree that the value is not an array.
 		if rhs_scope_typ := t.lookup_var_type(rhs.name()) {
@@ -3091,7 +3116,41 @@ fn (mut t Transformer) try_transform_array_append_cursor_to_flat(c ast.Cursor, m
 	}
 	array_ptr_typ_id := out.emit_ident_by_name('array*', token.Pos{})
 	arr_ptr_id := out.emit_cast_expr_by_ids(array_ptr_typ_id, cast_inner_id, token.Pos{})
-	rhs_id := t.transform_expr_cursor_to_flat(rhs, mut out)
+	mut rhs_id := t.transform_expr_cursor_to_flat(rhs, mut out)
+	if push_many {
+		// array__push_many(arr_ptr, rhs.data, rhs.len). The rhs here is a
+		// plain ident (no call: nothing to hoist, no prefix: no paren wrap);
+		// data/len are typed synth selectors exactly like the legacy
+		// synth_selector calls (same synth-pos consumption order).
+		data_id :=
+			t.synth_selector_cursor_to_flat(rhs_id, 'data', types.Type(types.voidptr_), mut out)
+		len_id := t.synth_selector_cursor_to_flat(rhs_id, 'len', types.Type(types.int_), mut out)
+		push_many_lhs_id := out.emit_ident_by_name('array__push_many', token.Pos{})
+		return out.emit_call_expr_by_ids(push_many_lhs_id, [arr_ptr_id, data_id, len_id], c.pos())
+	}
+	if t.contains_call_expr_cursor(rhs) {
+		// The legacy path hoists call-bearing values into a `_ap_tN` temp via
+		// pending_stmts so the call is evaluated before the push. Flush the
+		// chronologically-earlier legacy pendings into the flat queue first,
+		// then queue the temp assign as an already-flat stmt.
+		if t.pending_stmts.len > 0 {
+			pending := t.pending_stmts.clone()
+			t.pending_stmts.clear()
+			for ps in pending {
+				t.pending_flat_stmt_ids << out.emit_stmt(ps)
+			}
+		}
+		t.temp_counter++
+		tmp_name := '_ap_t${t.temp_counter}'
+		if rhs_type := t.get_expr_type_cursor(rhs) {
+			t.register_temp_var(tmp_name, rhs_type)
+		}
+		tmp_lhs_id := out.emit_ident_by_name(tmp_name, token.Pos{})
+		t.pending_flat_stmt_ids << out.emit_assign_stmt_by_ids(.decl_assign, [
+			tmp_lhs_id,
+		], [rhs_id], token.Pos{})
+		rhs_id = out.emit_ident_by_name(tmp_name, token.Pos{})
+	}
 	value_id := if elem_type_name == 'string' {
 		clone_lhs_id := out.emit_ident_by_name('string__clone', token.Pos{})
 		out.emit_call_expr_by_ids(clone_lhs_id, [rhs_id], token.Pos{})

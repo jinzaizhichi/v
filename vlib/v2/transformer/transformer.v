@@ -31,6 +31,12 @@ mut:
 	// a legacy decode, keyed by arm name. Dumped via V2_FLAT_FB_STATS to
 	// prioritize the remaining flat-native migration work.
 	flat_fb_counts map[string]int
+	// pending_flat_stmt_ids queues already-emitted flat stmt ids that
+	// cursor-native arms hoist ahead of the statement being transformed —
+	// the flat-side twin of `pending_stmts`. Hoisting arms must first flush
+	// `pending_stmts` into this queue so the combined drain keeps the legacy
+	// chronological order.
+	pending_flat_stmt_ids []ast.FlatNodeId
 	// Current scope for type lookups (walks up scope chain)
 	scope &types.Scope = unsafe { nil }
 	// Function root scope for registering transformer-created temp variables
