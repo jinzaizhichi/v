@@ -27,6 +27,10 @@ pub struct Transformer {
 mut:
 	pref &pref.Preferences = unsafe { nil }
 	env  &types.Environment
+	// flat_fb_counts tracks how often each cursor-transform arm falls back to
+	// a legacy decode, keyed by arm name. Dumped via V2_FLAT_FB_STATS to
+	// prioritize the remaining flat-native migration work.
+	flat_fb_counts map[string]int
 	// Current scope for type lookups (walks up scope chain)
 	scope &types.Scope = unsafe { nil }
 	// Function root scope for registering transformer-created temp variables
@@ -3316,7 +3320,35 @@ pub fn (mut t Transformer) transform_flat_to_flat_direct(flat &ast.FlatAst, file
 	if timing {
 		eprintln('  [ttime] flat input direct post_pass: ${sw.elapsed().milliseconds()}ms')
 	}
+	t.dump_flat_fallback_stats()
 	return builder.flat
+}
+
+// count_flat_fallback records one legacy-decode fallback hit for a cursor
+// transform arm. Used to prioritize the remaining flat-native migration.
+@[inline]
+fn (mut t Transformer) count_flat_fallback(key string) {
+	t.flat_fb_counts[key]++
+}
+
+// dump_flat_fallback_stats prints the per-arm legacy-decode fallback counts
+// recorded during the transform, gated on V2_FLAT_FB_STATS.
+fn (t &Transformer) dump_flat_fallback_stats() {
+	if os.getenv('V2_FLAT_FB_STATS') == '' {
+		return
+	}
+	mut keys := t.flat_fb_counts.keys()
+	keys.sort_with_compare(fn [t] (a &string, b &string) int {
+		return t.flat_fb_counts[*b] - t.flat_fb_counts[*a]
+	})
+	mut total := 0
+	for k in keys {
+		total += t.flat_fb_counts[k]
+	}
+	eprintln('[flat-fb] total legacy-decode fallbacks: ${total}')
+	for k in keys {
+		eprintln('[flat-fb]   ${t.flat_fb_counts[k]:8} ${k}')
+	}
 }
 
 fn new_transform_output_flat_builder(files []ast.File) ast.FlatBuilder {

@@ -1952,6 +1952,81 @@ fn (mut t Transformer) transform_stmt_list_item_to_flat(stmt ast.Stmt, mut ids [
 // First converted set: true-passthrough top-level kinds that carry no
 // `try_expand_*` guard and that `transform_stmt_to_flat` emits verbatim. Those
 // copy their flat subtrees directly, so they do not route through `c.stmt()`.
+
+// classify_call_fallback_cursor builds a diagnostic key describing WHY a call
+// fell back to the legacy decode path. Instrumentation for V2_FLAT_FB_STATS.
+fn (t &Transformer) classify_call_fallback_cursor(c ast.Cursor, prefix string) string {
+	lhs := c.edge(0)
+	if lhs.kind() != .expr_selector {
+		return '${prefix}/lhs=${lhs.kind()}'
+	}
+	receiver := lhs.edge(0)
+	method_name := selector_rhs_name_cursor(lhs)
+	if t.has_active_smartcast() {
+		return '${prefix}/sel/smartcast'
+	}
+	if method_name_needs_legacy_selector_pipeline(method_name) {
+		return '${prefix}/sel/legacy-list:${method_name}'
+	}
+	recv_type := t.get_expr_type_cursor(receiver) or { return '${prefix}/sel/no-recv-type' }
+	base := t.unwrap_alias_and_pointer_type(recv_type)
+	if base !is types.Struct {
+		return '${prefix}/sel/recv=${typeof(base).name}:${base.name()}'
+	}
+	if !t.type_has_cached_method(base, method_name) {
+		return '${prefix}/sel/no-cached-method'
+	}
+	if t.resolve_static_type_method_call_cursor(receiver, method_name) != none {
+		return '${prefix}/sel/static-shadow'
+	}
+	call_name := t.resolve_method_call_name_cursor(receiver, method_name) or {
+		return '${prefix}/sel/no-call-name'
+	}
+	if call_name in t.elided_fns {
+		return '${prefix}/sel/elided'
+	}
+	info := t.generic_aware_call_fn_info_cursor(c.edge(0), call_name) or {
+		return '${prefix}/sel/no-fn-info'
+	}
+	arg_count := c.edge_count() - 1
+	if info.param_types.len != arg_count {
+		return '${prefix}/sel/arity'
+	}
+	if info.is_variadic {
+		return '${prefix}/sel/variadic'
+	}
+	if info.generic_params.len > 0 {
+		return '${prefix}/sel/generic'
+	}
+	for i in 0 .. arg_count {
+		arg := c.edge(i + 1)
+		if arg.kind() == .aux_field_init {
+			return '${prefix}/sel/field-init-arg'
+		}
+		if !t.identity_call_arg_can_transform_direct(arg, info.param_types[i]) {
+			param_base := t.unwrap_alias_type(info.param_types[i])
+			param_kind := match param_base {
+				types.Struct { 'struct' }
+				types.Enum { 'enum' }
+				types.Array { 'array' }
+				types.ArrayFixed { 'array_fixed' }
+				types.Map { 'map' }
+				types.SumType { 'sumtype' }
+				types.Interface { 'interface' }
+				types.FnType { 'fn' }
+				types.OptionType { 'option' }
+				types.ResultType { 'result' }
+				types.Pointer { 'pointer' }
+				types.String { 'string' }
+				else { 'other' }
+			}
+
+			return '${prefix}/sel/arg-not-identity/param=${param_kind}'
+		}
+	}
+	return '${prefix}/sel/struct-late-gate-unknown'
+}
+
 fn (mut t Transformer) transform_stmt_list_item_cursor_to_flat(c ast.Cursor, mut ids []ast.FlatNodeId, mut out ast.FlatBuilder) {
 	match c.kind() {
 		.stmt_import, .stmt_module, .stmt_directive, .stmt_empty, .stmt_enum_decl,
@@ -1980,6 +2055,7 @@ fn (mut t Transformer) transform_stmt_list_item_cursor_to_flat(c ast.Cursor, mut
 			t.append_transformed_stmt_id_to_flat(mut ids, id, mut out)
 		}
 		.stmt_struct_decl {
+			t.count_flat_fallback('stmt_struct_decl')
 			id := out.emit_stmt(t.transform_struct_decl(c.struct_decl()))
 			t.append_transformed_stmt_id_to_flat(mut ids, id, mut out)
 		}
@@ -1995,6 +2071,7 @@ fn (mut t Transformer) transform_stmt_list_item_cursor_to_flat(c ast.Cursor, mut
 				return
 			}
 			if t.assign_stmt_cursor_needs_legacy_expand(c) {
+				t.count_flat_fallback('stmt_assign')
 				t.transform_stmt_list_item_to_flat(assign_stmt_from_cursor(c), mut ids, mut out)
 			} else {
 				id := t.transform_assign_stmt_cursor_to_flat(c, mut out)
@@ -2018,6 +2095,7 @@ fn (mut t Transformer) transform_stmt_list_item_cursor_to_flat(c ast.Cursor, mut
 				return
 			}
 			if t.expr_stmt_cursor_needs_legacy_expand(c) {
+				t.count_flat_fallback('stmt_expr')
 				t.transform_stmt_list_item_to_flat(expr_stmt_from_cursor(c), mut ids, mut out)
 			} else {
 				id := t.transform_expr_stmt_cursor_to_flat(c, mut out)
@@ -2029,6 +2107,7 @@ fn (mut t Transformer) transform_stmt_list_item_cursor_to_flat(c ast.Cursor, mut
 				return
 			}
 			if t.return_stmt_cursor_needs_legacy_expand(c) {
+				t.count_flat_fallback('stmt_return')
 				t.transform_stmt_list_item_to_flat(return_stmt_from_cursor(c), mut ids, mut out)
 			} else {
 				id := t.transform_return_stmt_cursor_to_flat(c, mut out)
@@ -2036,6 +2115,7 @@ fn (mut t Transformer) transform_stmt_list_item_cursor_to_flat(c ast.Cursor, mut
 			}
 		}
 		.stmt_for_in {
+			t.count_flat_fallback('stmt_for_in')
 			t.transform_stmt_list_item_to_flat(for_in_stmt_from_cursor(c), mut ids, mut out)
 		}
 		.stmt_fn_decl {
@@ -2043,6 +2123,7 @@ fn (mut t Transformer) transform_stmt_list_item_cursor_to_flat(c ast.Cursor, mut
 			// lowering needs the whole body, so those take the legacy
 			// whole-decl decode path).
 			if flat_body_has_defer(c.list_at(3)) {
+				t.count_flat_fallback('stmt_fn_decl_defer')
 				decl := fn_decl_signature_with_body_cursor(c.fn_decl_signature(), c)
 				t.transform_stmt_list_item_to_flat(decl, mut ids, mut out)
 			} else {
@@ -2938,6 +3019,60 @@ fn (t &Transformer) identity_call_arg_can_transform_direct(arg ast.Cursor, param
 		}
 		types.Primitive, types.Char, types.ISize, types.Nil, types.Rune, types.String, types.USize {
 			return true
+		}
+		types.Struct {
+			// An arg whose checker type is EXACTLY the (non-generic) param
+			// struct needs no call-boundary coercion (no sumtype wrap, no
+			// interface boxing, no auto-deref). Smartcast scopes stay on the
+			// legacy path: an active cast can change an ident's effective
+			// type between the declared and narrowed form.
+			if base.generic_params.len > 0 || t.has_active_smartcast() {
+				return false
+			}
+			arg_typ := t.get_expr_type_cursor(arg) or { return false }
+			arg_base := t.unwrap_alias_type(arg_typ)
+			if arg_base is types.Struct {
+				return arg_base.name == base.name && arg_base.generic_params.len == 0
+			}
+			return false
+		}
+		types.SumType {
+			// Exact sumtype-to-sumtype: the arg is already the param's sum
+			// type, so no variant wrapping applies.
+			if t.has_active_smartcast() {
+				return false
+			}
+			arg_typ := t.get_expr_type_cursor(arg) or { return false }
+			arg_base := t.unwrap_alias_type(arg_typ)
+			if arg_base is types.SumType {
+				return arg_base.name == base.name
+			}
+			return false
+		}
+		types.Enum {
+			// Typed enum values pass through unchanged. Bare `.value`
+			// shorthand args need the param's enum context to resolve, so
+			// they keep the legacy pipeline (as does anything that is not a
+			// plain ident/qualified selector).
+			if t.has_active_smartcast() {
+				return false
+			}
+			if arg.kind() == .expr_ident {
+				// fine: a typed enum variable resolves without param context
+			} else if arg.kind() == .expr_selector {
+				lhs := arg.edge(0)
+				if !lhs.is_valid() || lhs.kind() == .expr_empty {
+					return false
+				}
+			} else {
+				return false
+			}
+			arg_typ := t.get_expr_type_cursor(arg) or { return false }
+			arg_base := t.unwrap_alias_type(arg_typ)
+			if arg_base is types.Enum {
+				return arg_base.name == base.name
+			}
+			return false
 		}
 		else {
 			return false
@@ -4024,10 +4159,12 @@ fn (mut t Transformer) transform_expr_cursor_to_flat(c ast.Cursor, mut out ast.F
 			return t.emit_lowered_expr_result_to_flat(result, mut out)
 		}
 		.expr_assoc {
+			t.count_flat_fallback('expr_assoc')
 			result := t.lower_assoc_expr(assoc_expr_from_cursor(c), false)
 			return t.emit_lowered_expr_result_to_flat(result, mut out)
 		}
 		.expr_or {
+			t.count_flat_fallback('expr_or')
 			return t.transform_expr_to_flat(ast.Expr(or_expr_from_cursor(c)), mut out)
 		}
 		.expr_infix {
@@ -4058,6 +4195,7 @@ fn (mut t Transformer) transform_expr_cursor_to_flat(c ast.Cursor, mut out ast.F
 				rhs_id := t.transform_expr_cursor_to_flat(c.edge(1), mut out)
 				return out.emit_infix_expr_by_ids(op, lhs_id, rhs_id, t.infix_cursor_result_pos(c))
 			}
+			t.count_flat_fallback('expr_infix')
 			result := t.transform_infix_expr(infix_expr_from_cursor(c))
 			return t.emit_lowered_expr_result_to_flat(result, mut out)
 		}
@@ -4102,6 +4240,7 @@ fn (mut t Transformer) transform_expr_cursor_to_flat(c ast.Cursor, mut out ast.F
 				}
 				return out.emit_call_expr_by_ids(lhs_id, arg_ids, c.pos())
 			}
+			t.count_flat_fallback(t.classify_call_fallback_cursor(c, 'expr_call'))
 			result := t.transform_call_expr(call_expr_from_cursor(c))
 			return t.emit_lowered_expr_result_to_flat(result, mut out)
 		}
@@ -4171,6 +4310,7 @@ fn (mut t Transformer) transform_expr_cursor_to_flat(c ast.Cursor, mut out ast.F
 					return out.emit_cast_expr_by_ids(typ_id, expr_id, c.pos())
 				}
 			}
+			t.count_flat_fallback(t.classify_call_fallback_cursor(c, 'expr_coc'))
 			result := t.transform_call_or_cast_expr(call_or_cast_expr_from_cursor(c))
 			return t.emit_lowered_expr_result_to_flat(result, mut out)
 		}
@@ -4178,6 +4318,7 @@ fn (mut t Transformer) transform_expr_cursor_to_flat(c ast.Cursor, mut out ast.F
 			if result_id := t.transform_map_init_cursor_to_flat(c, mut out) {
 				return result_id
 			}
+			t.count_flat_fallback('expr_map_init')
 			result := t.transform_map_init_expr(map_init_expr_from_cursor(c))
 			return t.emit_lowered_expr_result_to_flat(result, mut out)
 		}
@@ -4191,6 +4332,7 @@ fn (mut t Transformer) transform_expr_cursor_to_flat(c ast.Cursor, mut out ast.F
 			if result_id := t.transform_explicit_dynamic_array_init_cursor_to_flat(c, mut out) {
 				return result_id
 			}
+			t.count_flat_fallback('expr_array_init')
 			result := t.transform_array_init_expr(array_init_expr_from_cursor(c))
 			return t.emit_lowered_expr_result_to_flat(result, mut out)
 		}
@@ -4198,16 +4340,19 @@ fn (mut t Transformer) transform_expr_cursor_to_flat(c ast.Cursor, mut out ast.F
 			if result_id := t.transform_empty_map_init_cursor_to_flat(c, mut out) {
 				return result_id
 			}
+			t.count_flat_fallback('expr_init')
 			return t.transform_init_expr_to_flat(init_expr_from_cursor(c), mut out)
 		}
 		.expr_if {
 			if t.if_expr_cursor_can_transform_plain(c) {
 				return t.transform_plain_if_expr_cursor_to_flat(c, mut out)
 			}
+			t.count_flat_fallback('expr_if')
 			result := t.transform_if_expr(if_expr_from_cursor(c))
 			return t.emit_lowered_expr_result_to_flat(result, mut out)
 		}
 		.expr_match {
+			t.count_flat_fallback('expr_match')
 			match_expr, branches := t.transform_match_expr_parts(match_expr_from_cursor(c))
 			return t.lower_match_expr_to_if_flat(match_expr, branches, mut out)
 		}
@@ -4321,6 +4466,7 @@ fn (mut t Transformer) transform_expr_cursor_to_flat(c ast.Cursor, mut out ast.F
 				rhs_id := out.copy_subtree_from(rhs.flat, rhs.id)
 				return out.emit_selector_expr_by_ids(lhs_id, rhs_id, c.pos())
 			}
+			t.count_flat_fallback('expr_selector')
 			result := t.transform_selector_expr(selector_expr_from_cursor(c))
 			return t.emit_lowered_expr_result_to_flat(result, mut out)
 		}
@@ -4331,6 +4477,7 @@ fn (mut t Transformer) transform_expr_cursor_to_flat(c ast.Cursor, mut out ast.F
 				return out.emit_index_expr_by_ids(lhs_id, index_id, c.flag(ast.flag_is_gated),
 					c.pos())
 			}
+			t.count_flat_fallback('expr_index')
 			result := t.transform_index_expr(index_expr_from_cursor(c))
 			return t.emit_lowered_expr_result_to_flat(result, mut out)
 		}
@@ -6789,6 +6936,7 @@ fn (mut t Transformer) transform_stmt_cursor_to_flat(c ast.Cursor, mut out ast.F
 				return id
 			}
 			if t.assign_stmt_cursor_needs_legacy_expand(c) {
+				t.count_flat_fallback('nested_assign')
 				return t.transform_stmt_to_flat(assign_stmt_from_cursor(c), mut out)
 			}
 			return t.transform_assign_stmt_cursor_to_flat(c, mut out)
@@ -6804,6 +6952,7 @@ fn (mut t Transformer) transform_stmt_cursor_to_flat(c ast.Cursor, mut out ast.F
 				return id
 			}
 			if t.expr_stmt_cursor_needs_legacy_expand(c) {
+				t.count_flat_fallback('nested_expr')
 				return t.transform_stmt_to_flat(expr_stmt_from_cursor(c), mut out)
 			}
 			return t.transform_expr_stmt_cursor_to_flat(c, mut out)
@@ -6812,10 +6961,12 @@ fn (mut t Transformer) transform_stmt_cursor_to_flat(c ast.Cursor, mut out ast.F
 			return t.transform_return_stmt_cursor_to_flat(c, mut out)
 		}
 		.stmt_for_in {
+			t.count_flat_fallback('nested_for_in')
 			return t.transform_stmt_to_flat(for_in_stmt_from_cursor(c), mut out)
 		}
 		.stmt_fn_decl {
 			if flat_body_has_defer(c.list_at(3)) {
+				t.count_flat_fallback('nested_fn_decl_defer')
 				decl := fn_decl_signature_with_body_cursor(c.fn_decl_signature(), c)
 				return t.transform_stmt_to_flat(decl, mut out)
 			}
@@ -6824,6 +6975,7 @@ fn (mut t Transformer) transform_stmt_cursor_to_flat(c ast.Cursor, mut out ast.F
 		.stmt_for {
 			init_c := c.edge(0)
 			if init_c.is_valid() && init_c.kind() == .stmt_for_in {
+				t.count_flat_fallback('nested_for')
 				return t.transform_stmt_to_flat(for_stmt_from_cursor(c), mut out)
 			}
 			return t.transform_for_stmt_streaming_to_flat(c, mut out)
