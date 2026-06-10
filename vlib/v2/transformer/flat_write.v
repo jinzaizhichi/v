@@ -1970,11 +1970,24 @@ fn (t &Transformer) classify_call_fallback_cursor(c ast.Cursor, prefix string) s
 	}
 	recv_type := t.get_expr_type_cursor(receiver) or { return '${prefix}/sel/no-recv-type' }
 	base := t.unwrap_alias_and_pointer_type(recv_type)
-	if base !is types.Struct {
-		return '${prefix}/sel/recv=${typeof(base).name}:${base.name()}'
-	}
-	if !t.type_has_cached_method(base, method_name) {
-		return '${prefix}/sel/no-cached-method'
+	if base is types.Struct {
+		if !t.type_has_cached_method(base, method_name) {
+			return '${prefix}/sel/no-cached-method'
+		}
+	} else {
+		// Mirror the non-struct receiver gate: only its rejects classify as
+		// receiver failures; accepted receivers fall through to late gates.
+		if method_name in ['filter', 'map', 'any', 'count', 'wait'] {
+			return '${prefix}/sel/expansion-method:${method_name}'
+		}
+		if base is types.Interface || base is types.SumType {
+			return '${prefix}/sel/recv-dispatch=${base.name()}'
+		}
+		if t.resolve_alias_receiver_method_name(recv_type, method_name) == none
+			&& !(t.type_is_string(recv_type)
+			&& t.lookup_method_cached('string', method_name) != none) {
+			return '${prefix}/sel/recv=${typeof(base).name}:${base.name()}:m=${method_name}'
+		}
 	}
 	if t.resolve_static_type_method_call_cursor(receiver, method_name) != none {
 		return '${prefix}/sel/static-shadow'
@@ -1988,9 +2001,18 @@ fn (t &Transformer) classify_call_fallback_cursor(c ast.Cursor, prefix string) s
 	info := t.generic_aware_call_fn_info_cursor(c.edge(0), call_name) or {
 		return '${prefix}/sel/no-fn-info'
 	}
-	arg_count := c.edge_count() - 1
+	arg_count := if c.kind() == .expr_call_or_cast {
+		arg0 := c.edge(1)
+		if arg0.is_valid() && arg0.kind() != .expr_empty {
+			1
+		} else {
+			0
+		}
+	} else {
+		c.edge_count() - 1
+	}
 	if info.param_types.len != arg_count {
-		return '${prefix}/sel/arity'
+		return '${prefix}/sel/arity:${call_name}:${info.param_types.len}vs${arg_count}'
 	}
 	if info.is_variadic {
 		return '${prefix}/sel/variadic'
@@ -3591,6 +3613,28 @@ fn (t &Transformer) receiver_method_cursor_can_transform_direct(receiver ast.Cur
 	return false
 }
 
+// direct_method_call_fn_info_cursor returns the resolved method's declared
+// receiver-less signature for the direct-call gates. The shared
+// generic_aware_call_fn_info_cursor path heuristically strips a "receiver"
+// param from checker fn types, which eats the real first param whenever its
+// type equals the receiver type (e.g. s.starts_with(prefix) — both string).
+// The cached method declaration never includes the receiver in its params,
+// so it is the ground truth for arity and per-arg identity checks.
+fn (t &Transformer) direct_method_call_fn_info_cursor(lhs ast.Cursor, method_name string, call_name string) ?CallFnInfo {
+	recv_key := call_name.all_before_last('__')
+	mut lookup_names := []string{cap: 2}
+	lookup_names << recv_key
+	if recv_key.contains('__') {
+		lookup_names << recv_key.all_after_last('__')
+	}
+	for name in lookup_names {
+		if fn_type := t.lookup_method_cached(name, method_name) {
+			return call_fn_info_from_fn_type(fn_type)
+		}
+	}
+	return t.generic_aware_call_fn_info_cursor(lhs, call_name)
+}
+
 fn (t &Transformer) call_selector_method_name_can_transform_direct(c ast.Cursor) ?string {
 	if c.kind() != .expr_call || c.edge_count() == 0 {
 		return none
@@ -3612,7 +3656,7 @@ fn (t &Transformer) call_selector_method_name_can_transform_direct(c ast.Cursor)
 	if call_name in t.elided_fns {
 		return none
 	}
-	info := t.generic_aware_call_fn_info_cursor(lhs, call_name) or { return none }
+	info := t.direct_method_call_fn_info_cursor(lhs, method_name, call_name) or { return none }
 	arg_count := c.edge_count() - 1
 	if info.param_types.len != arg_count || info.is_variadic || info.generic_params.len > 0 {
 		return none
@@ -3730,7 +3774,7 @@ fn (t &Transformer) call_or_cast_selector_method_name_can_transform_direct(c ast
 	}
 	arg := c.edge(1)
 	arg_count := if arg.is_valid() && arg.kind() != .expr_empty { 1 } else { 0 }
-	info := t.generic_aware_call_fn_info_cursor(lhs, call_name) or { return none }
+	info := t.direct_method_call_fn_info_cursor(lhs, method_name, call_name) or { return none }
 	if info.param_types.len != arg_count || info.is_variadic || info.generic_params.len > 0 {
 		return none
 	}
