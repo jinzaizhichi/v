@@ -2909,6 +2909,111 @@ fn (t &Transformer) infix_and_cursor_can_transform_direct(c ast.Cursor) bool {
 	return true
 }
 
+// try_transform_array_append_cursor_to_flat streams the common `arr << value`
+// single-element append cursor-native, mirroring the legacy lowering in
+// transform_infix_expr (expr.v):
+//   builtin__array_push_noscan((array*)&arr, (elem_type[]){ value })
+// The gates are deliberately strict so that every accepted shape provably
+// takes the same single-push path in the legacy pipeline:
+//   - lhs is a plain ident whose scope type resolves to a dynamic array
+//     (mirrors get_array_elem_type_str's first, deterministic branch);
+//   - the elem type is not a (pointer-to-)sum type (no
+//     wrap_array_push_elem_value effect) and not a nested array (no
+//     push_many ambiguity);
+//   - the rhs has no calls (the legacy path hoists call-bearing values into
+//     a pending `_ap_tN` temp), is not enum shorthand, not a bitwise infix
+//     (reassociation), not an `_or_tN.data` extract, and its checker type is
+//     definitively NOT an array (so push_many cannot apply).
+// Everything else returns none and keeps the legacy decode fallback.
+fn (mut t Transformer) try_transform_array_append_cursor_to_flat(c ast.Cursor, mut out ast.FlatBuilder) ?ast.FlatNodeId {
+	if t.is_eval_backend() {
+		return none
+	}
+	lhs := c.edge(0)
+	rhs := c.edge(1)
+	if lhs.kind() != .expr_ident {
+		return none
+	}
+	lhs_typ := t.lookup_var_type(lhs.name()) or { return none }
+	lhs_base := t.unwrap_alias_and_pointer_type(lhs_typ)
+	if lhs_base !is types.Array {
+		return none
+	}
+	arr_type := lhs_base as types.Array
+	elem_type_name :=
+		t.normalize_literal_type(t.array_elem_type_name_for_helpers(arr_type.elem_type))
+	if elem_type_name == '' || elem_type_name == 'void' {
+		return none
+	}
+	if elem_type_name.starts_with('Array_') || elem_type_name == 'array' {
+		return none
+	}
+	if t.is_sum_type(elem_type_name) || t.sumtype_pointer_base(elem_type_name) != '' {
+		return none
+	}
+	if rhs.kind() == .expr_selector {
+		rhs_lhs := rhs.edge(0)
+		if !rhs_lhs.is_valid() || rhs_lhs.kind() == .expr_empty {
+			return none
+		}
+		if selector_rhs_name_cursor(rhs) == 'data' && rhs_lhs.kind() == .expr_ident
+			&& rhs_lhs.name().starts_with('_or_t') {
+			return none
+		}
+	}
+	if rhs.kind() == .expr_infix {
+		rhs_op := unsafe { token.Token(int(rhs.aux())) }
+		if rhs_op in [.amp, .pipe, .xor, .left_shift, .right_shift] {
+			return none
+		}
+	}
+	if t.contains_call_expr_cursor(rhs) {
+		return none
+	}
+	rhs_typ := t.get_expr_type_cursor(rhs) or { return none }
+	rhs_base := t.unwrap_alias_and_pointer_type(rhs_typ)
+	if rhs_base is types.Array || rhs_base is types.ArrayFixed {
+		return none
+	}
+	if rhs.kind() == .expr_ident {
+		// The legacy rhs analysis consults the scope before the checker env;
+		// require both to agree that the value is not an array.
+		if rhs_scope_typ := t.lookup_var_type(rhs.name()) {
+			rhs_scope_base := t.unwrap_alias_and_pointer_type(rhs_scope_typ)
+			if rhs_scope_base is types.Array || rhs_scope_base is types.ArrayFixed {
+				return none
+			}
+		}
+	}
+	// Emission mirrors the legacy tree shape and evaluation order exactly
+	// (lhs transform, then rhs transform; synthetic wrapper nodes carry a
+	// zero pos like their legacy counterparts).
+	lhs_is_ptr := (lhs.name() == t.cur_fn_recv_param && t.cur_fn_recv_is_ptr)
+		|| t.is_pointer_type(lhs_typ)
+	lhs_id := t.transform_expr_cursor_to_flat(lhs, mut out)
+	cast_inner_id := if lhs_is_ptr {
+		lhs_id
+	} else {
+		out.emit_prefix_expr_by_id(.amp, lhs_id, c.pos())
+	}
+	array_ptr_typ_id := out.emit_ident_by_name('array*', token.Pos{})
+	arr_ptr_id := out.emit_cast_expr_by_ids(array_ptr_typ_id, cast_inner_id, token.Pos{})
+	rhs_id := t.transform_expr_cursor_to_flat(rhs, mut out)
+	value_id := if elem_type_name == 'string' {
+		clone_lhs_id := out.emit_ident_by_name('string__clone', token.Pos{})
+		out.emit_call_expr_by_ids(clone_lhs_id, [rhs_id], token.Pos{})
+	} else {
+		rhs_id
+	}
+	elem_ident_id := out.emit_ident_by_name(elem_type_name, token.Pos{})
+	arr_typ_id := out.emit_array_type_by_elem_id(elem_ident_id)
+	arr_lit_id := out.emit_array_init_expr_by_ids(arr_typ_id, out.emit_expr(ast.empty_expr),
+		out.emit_expr(ast.empty_expr), out.emit_expr(ast.empty_expr),
+		out.emit_expr(ast.empty_expr), [value_id], token.Pos{})
+	push_lhs_id := out.emit_ident_by_name('builtin__array_push_noscan', token.Pos{})
+	return out.emit_call_expr_by_ids(push_lhs_id, [arr_ptr_id, arr_lit_id], c.pos())
+}
+
 fn (t &Transformer) infix_left_shift_cursor_can_transform_direct(c ast.Cursor) bool {
 	lhs_type := t.get_expr_type_cursor(c.edge(0)) or { return false }
 	lhs_base := t.unwrap_alias_and_pointer_type(lhs_type)
@@ -4206,6 +4311,11 @@ fn (mut t Transformer) transform_expr_cursor_to_flat(c ast.Cursor, mut out ast.F
 			}
 			if result_id := t.transform_map_membership_cursor_to_flat(c, op, mut out) {
 				return result_id
+			}
+			if op == .left_shift {
+				if result_id := t.try_transform_array_append_cursor_to_flat(c, mut out) {
+					return result_id
+				}
 			}
 			if t.infix_cursor_can_transform_direct(c, op) {
 				lhs_id := t.transform_expr_cursor_to_flat(c.edge(0), mut out)
