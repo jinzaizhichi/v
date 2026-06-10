@@ -3613,6 +3613,46 @@ fn (t &Transformer) receiver_method_cursor_can_transform_direct(receiver ast.Cur
 	return false
 }
 
+// enum_shorthand_arg_can_transform_direct reports whether `arg` is a bare
+// `.member` enum shorthand for an enum-typed parameter — the one non-identity
+// arg shape the direct call arms resolve themselves (mirroring
+// resolve_expr_with_expected_type -> resolve_enum_shorthand).
+fn (t &Transformer) enum_shorthand_arg_can_transform_direct(arg ast.Cursor, param_typ types.Type) bool {
+	if t.has_active_smartcast() {
+		return false
+	}
+	param_base := t.unwrap_alias_type(param_typ)
+	if param_base !is types.Enum {
+		return false
+	}
+	if arg.kind() != .expr_selector {
+		return false
+	}
+	lhs := arg.edge(0)
+	return !lhs.is_valid() || lhs.kind() == .expr_empty
+}
+
+// transform_call_arg_cursor_to_flat emits one direct-call argument with the
+// parameter type as context: bare enum shorthand resolves to the member ident
+// exactly like the legacy resolve_enum_shorthand (same synth-type
+// registration at the selector pos); everything else transforms normally.
+fn (mut t Transformer) transform_call_arg_cursor_to_flat(arg ast.Cursor, param_typ types.Type, mut out ast.FlatBuilder) ast.FlatNodeId {
+	if t.enum_shorthand_arg_can_transform_direct(arg, param_typ) {
+		param_base := t.unwrap_alias_type(param_typ)
+		enum_name := t.type_to_c_name(param_base)
+		member := selector_rhs_name_cursor(arg)
+		if typ := t.lookup_type(enum_name) {
+			t.register_synth_type(arg.pos(), typ)
+			if typ is types.Enum {
+				return out.emit_ident_by_name(t.enum_member_ident_for_lookup(enum_name, typ, member),
+					arg.pos())
+			}
+		}
+		return out.emit_ident_by_name(enum_member_ident(enum_name, member), arg.pos())
+	}
+	return t.transform_expr_cursor_to_flat(arg, mut out)
+}
+
 // direct_method_call_fn_info_cursor returns the resolved method's declared
 // receiver-less signature for the direct-call gates. The shared
 // generic_aware_call_fn_info_cursor path heuristically strips a "receiver"
@@ -3666,7 +3706,8 @@ fn (t &Transformer) call_selector_method_name_can_transform_direct(c ast.Cursor)
 		if arg.kind() == .aux_field_init {
 			return none
 		}
-		if !t.identity_call_arg_can_transform_direct(arg, info.param_types[i]) {
+		if !t.identity_call_arg_can_transform_direct(arg, info.param_types[i])
+			&& !t.enum_shorthand_arg_can_transform_direct(arg, info.param_types[i]) {
 			return none
 		}
 	}
@@ -3780,7 +3821,8 @@ fn (t &Transformer) call_or_cast_selector_method_name_can_transform_direct(c ast
 	}
 	if arg_count == 1 {
 		if arg.kind() == .aux_field_init
-			|| !t.identity_call_arg_can_transform_direct(arg, info.param_types[0]) {
+			|| (!t.identity_call_arg_can_transform_direct(arg, info.param_types[0])
+			&& !t.enum_shorthand_arg_can_transform_direct(arg, info.param_types[0])) {
 			return none
 		}
 	}
@@ -4618,11 +4660,18 @@ fn (mut t Transformer) transform_expr_cursor_to_flat(c ast.Cursor, mut out ast.F
 			}
 			if call_name := t.call_selector_method_name_can_transform_direct(c) {
 				lhs := c.edge(0)
+				info := t.direct_method_call_fn_info_cursor(lhs, selector_rhs_name_cursor(lhs),
+					call_name) or { CallFnInfo{} }
 				lhs_id := out.emit_ident_by_name(call_name, lhs.pos())
 				mut arg_ids := []ast.FlatNodeId{cap: c.edge_count()}
 				arg_ids << t.transform_expr_cursor_to_flat(lhs.edge(0), mut out)
 				for i in 1 .. c.edge_count() {
-					arg_ids << t.transform_expr_cursor_to_flat(c.edge(i), mut out)
+					if i - 1 < info.param_types.len {
+						arg_ids << t.transform_call_arg_cursor_to_flat(c.edge(i),
+							info.param_types[i - 1], mut out)
+					} else {
+						arg_ids << t.transform_expr_cursor_to_flat(c.edge(i), mut out)
+					}
 				}
 				return out.emit_call_expr_by_ids(lhs_id, arg_ids, c.pos())
 			}
@@ -4659,11 +4708,17 @@ fn (mut t Transformer) transform_expr_cursor_to_flat(c ast.Cursor, mut out ast.F
 				return out.emit_call_expr_by_ids(lhs_id, arg_ids, c.pos())
 			}
 			if call_name := t.call_or_cast_selector_method_name_can_transform_direct(c) {
+				info := t.direct_method_call_fn_info_cursor(lhs, selector_rhs_name_cursor(lhs),
+					call_name) or { CallFnInfo{} }
 				lhs_id := out.emit_ident_by_name(call_name, lhs.pos())
 				mut arg_ids := []ast.FlatNodeId{cap: 2}
 				arg_ids << t.transform_expr_cursor_to_flat(lhs.edge(0), mut out)
 				if arg.is_valid() && arg.kind() != .expr_empty {
-					arg_ids << t.transform_expr_cursor_to_flat(arg, mut out)
+					if info.param_types.len > 0 {
+						arg_ids << t.transform_call_arg_cursor_to_flat(arg, info.param_types[0], mut out)
+					} else {
+						arg_ids << t.transform_expr_cursor_to_flat(arg, mut out)
+					}
 				}
 				return out.emit_call_expr_by_ids(lhs_id, arg_ids, c.pos())
 			}
