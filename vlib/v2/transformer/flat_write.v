@@ -5307,10 +5307,16 @@ fn (t &Transformer) selector_cursor_can_transform_direct(c ast.Cursor) bool {
 	if rhs_name == '' {
 		return false
 	}
-	if rhs_name in ['name', 'idx', '_tag', '_data'] || rhs_name.starts_with('_') {
+	if rhs_name in ['_tag', '_data'] || rhs_name.starts_with('_') {
 		return false
 	}
 	lhs := c.edge(0)
+	if rhs_name in ['name', 'idx']
+		&& lhs.kind() in [.expr_keyword_operator, .expr_call, .expr_call_or_cast] {
+		// typeof(x).name / typeof[T]().idx lower to literals in the legacy
+		// pipeline; plain field accesses named `name`/`idx` are ordinary.
+		return false
+	}
 	if lhs.kind() == .expr_ident {
 		lhs_name := lhs.name()
 		if lhs_name == 'os' && rhs_name == 'args' {
