@@ -2909,6 +2909,69 @@ fn (t &Transformer) infix_and_cursor_can_transform_direct(c ast.Cursor) bool {
 	return true
 }
 
+// get_struct_field_type_cursor mirrors get_struct_field_type (struct.v) for a
+// cursor selector, minus the smartcast branch — callers gate on
+// !has_active_smartcast(), which makes that branch a no-op in the legacy
+// pipeline too.
+fn (t &Transformer) get_struct_field_type_cursor(sel ast.Cursor) ?types.Type {
+	field_name := selector_rhs_name_cursor(sel)
+	if field_name == '' {
+		return none
+	}
+	lhs := sel.edge(0)
+	mut struct_type_name := ''
+	if lhs.kind() == .expr_ident {
+		lhs_name := lhs.name()
+		if lhs_name == '' {
+			return none
+		}
+		if lhs_type := t.lookup_var_type(lhs_name) {
+			if field_typ := t.field_type_from_receiver_type(lhs_type, field_name) {
+				return field_typ
+			}
+			base_type := lhs_type.base_type()
+			if base_type is types.Struct {
+				if field_typ := t.lookup_struct_field_type(base_type.name, field_name) {
+					return field_typ
+				}
+			}
+			struct_type_name = t.type_to_name(base_type)
+		}
+	}
+	if struct_type_name != '' {
+		looked_up_type := t.lookup_type(struct_type_name) or { return none }
+		looked_base := if looked_up_type is types.Pointer {
+			looked_up_type.base_type
+		} else {
+			looked_up_type
+		}
+		match looked_base {
+			types.Struct {
+				if field_typ := t.lookup_struct_field_type(looked_base.name, field_name) {
+					return field_typ
+				}
+			}
+			else {}
+		}
+	}
+	struct_type := t.get_expr_type_cursor(lhs) or { return none }
+	base_type := if struct_type is types.Pointer {
+		struct_type.base_type
+	} else {
+		struct_type
+	}
+	match base_type {
+		types.Struct {
+			if field_typ := t.lookup_struct_field_type(base_type.name, field_name) {
+				return field_typ
+			}
+		}
+		else {}
+	}
+
+	return none
+}
+
 // try_transform_array_append_cursor_to_flat streams the common `arr << value`
 // single-element append cursor-native, mirroring the legacy lowering in
 // transform_infix_expr (expr.v):
@@ -2931,17 +2994,49 @@ fn (mut t Transformer) try_transform_array_append_cursor_to_flat(c ast.Cursor, m
 	}
 	lhs := c.edge(0)
 	rhs := c.edge(1)
-	if lhs.kind() != .expr_ident {
+	mut elem_type_name := ''
+	mut lhs_is_ptr := false
+	if lhs.kind() == .expr_ident {
+		lhs_typ := t.lookup_var_type(lhs.name()) or { return none }
+		lhs_base := t.unwrap_alias_and_pointer_type(lhs_typ)
+		if lhs_base !is types.Array {
+			return none
+		}
+		arr_type := lhs_base as types.Array
+		// Mirrors the ident branch of get_array_elem_type_str (which
+		// normalizes literal elem type names).
+		elem_type_name =
+			t.normalize_literal_type(t.array_elem_type_name_for_helpers(arr_type.elem_type))
+		lhs_is_ptr = (lhs.name() == t.cur_fn_recv_param && t.cur_fn_recv_is_ptr)
+			|| t.is_pointer_type(lhs_typ)
+	} else if lhs.kind() == .expr_selector {
+		// Mirrors the SelectorExpr branch of get_array_elem_type_str: struct
+		// field type first, then the env type of the whole selector. Neither
+		// normalizes the elem name. Smartcast scopes stay legacy (the legacy
+		// chain consults smartcast_type_for_expr first).
+		if t.has_active_smartcast() {
+			return none
+		}
+		if field_typ := t.get_struct_field_type_cursor(lhs) {
+			field_base := t.unwrap_alias_and_pointer_type(field_typ)
+			if field_base is types.Array {
+				elem_type_name = t.array_elem_type_name_for_helpers(field_base.elem_type)
+			}
+		}
+		if elem_type_name == '' {
+			typ := t.get_expr_type_cursor(lhs) or { return none }
+			base := t.unwrap_alias_and_pointer_type(typ)
+			if base !is types.Array {
+				return none
+			}
+			arr_type := base as types.Array
+			elem_type_name = t.array_elem_type_name_for_helpers(arr_type.elem_type)
+		}
+		// is_pointer_type_expr has no selector branch: always address-of.
+		lhs_is_ptr = false
+	} else {
 		return none
 	}
-	lhs_typ := t.lookup_var_type(lhs.name()) or { return none }
-	lhs_base := t.unwrap_alias_and_pointer_type(lhs_typ)
-	if lhs_base !is types.Array {
-		return none
-	}
-	arr_type := lhs_base as types.Array
-	elem_type_name :=
-		t.normalize_literal_type(t.array_elem_type_name_for_helpers(arr_type.elem_type))
 	if elem_type_name == '' || elem_type_name == 'void' {
 		return none
 	}
@@ -2988,8 +3083,6 @@ fn (mut t Transformer) try_transform_array_append_cursor_to_flat(c ast.Cursor, m
 	// Emission mirrors the legacy tree shape and evaluation order exactly
 	// (lhs transform, then rhs transform; synthetic wrapper nodes carry a
 	// zero pos like their legacy counterparts).
-	lhs_is_ptr := (lhs.name() == t.cur_fn_recv_param && t.cur_fn_recv_is_ptr)
-		|| t.is_pointer_type(lhs_typ)
 	lhs_id := t.transform_expr_cursor_to_flat(lhs, mut out)
 	cast_inner_id := if lhs_is_ptr {
 		lhs_id
