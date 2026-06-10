@@ -1987,6 +1987,10 @@ fn (mut t Transformer) transform_stmt_list_item_cursor_to_flat(c ast.Cursor, mut
 			t.expand_assert_stmt_cursor_to_flat(c, mut ids, mut out)
 		}
 		.stmt_assign {
+			if id := t.transform_map_index_assign_cursor_to_flat(c, mut out) {
+				t.append_transformed_stmt_id_to_flat(mut ids, id, mut out)
+				return
+			}
 			if t.try_expand_if_expr_assign_cursor_to_flat(c, mut ids, mut out) {
 				return
 			}
@@ -2002,8 +2006,15 @@ fn (mut t Transformer) transform_stmt_list_item_cursor_to_flat(c ast.Cursor, mut
 			t.append_transformed_stmt_id_to_flat(mut ids, id, mut out)
 		}
 		.stmt_expr {
+			if t.try_expand_comptime_if_stmt_cursor_to_flat(c, mut ids, mut out) {
+				return
+			}
 			if c.edge(0).kind() == .expr_lock {
 				t.expand_lock_expr_cursor_to_flat(c.edge(0), mut ids, mut out)
+				return
+			}
+			if id := t.transform_flag_enum_set_clear_cursor_to_flat(c, mut out) {
+				t.append_transformed_stmt_id_to_flat(mut ids, id, mut out)
 				return
 			}
 			if t.expr_stmt_cursor_needs_legacy_expand(c) {
@@ -2399,6 +2410,9 @@ fn (t &Transformer) is_nil_expr_cursor(c ast.Cursor) bool {
 		}
 		.expr_keyword {
 			unsafe { token.Token(int(c.aux())) } == .key_nil
+		}
+		.typ_nil {
+			true
 		}
 		.expr_basic_literal {
 			unsafe { token.Token(int(c.aux())) } == .number && c.name() == '0'
@@ -5623,6 +5637,102 @@ fn (mut t Transformer) transform_comptime_stmt_cursor_to_flat(c ast.Cursor, mut 
 	return t.transform_stmt_cursor_to_flat(inner, mut out)
 }
 
+fn (mut t Transformer) try_expand_comptime_if_stmt_cursor_to_flat(c ast.Cursor, mut ids []ast.FlatNodeId, mut out ast.FlatBuilder) bool {
+	if if_expr := t.comptime_if_cursor_from_expr_stmt(c) {
+		if !t.can_eval_selected_comptime_if_cursor(if_expr) {
+			return false
+		}
+		selected_ids := t.selected_comptime_if_cursor_stmts_to_flat(if_expr, mut out)
+		for id in selected_ids {
+			t.append_transformed_stmt_id_to_flat(mut ids, id, mut out)
+		}
+		return true
+	}
+	return false
+}
+
+fn (mut t Transformer) transform_comptime_if_stmt_cursor_to_flat(c ast.Cursor, mut out ast.FlatBuilder) ?ast.FlatNodeId {
+	if if_expr := t.comptime_if_cursor_from_expr_stmt(c) {
+		if !t.can_eval_selected_comptime_if_cursor(if_expr) {
+			return none
+		}
+		selected_ids := t.selected_comptime_if_cursor_stmts_to_flat(if_expr, mut out)
+		if selected_ids.len == 1 {
+			return selected_ids[0]
+		}
+		return out.emit_block_stmt_by_ids(selected_ids)
+	}
+	return none
+}
+
+fn (t &Transformer) comptime_if_cursor_from_expr_stmt(c ast.Cursor) ?ast.Cursor {
+	if !c.is_valid() || c.kind() != .stmt_expr || c.edge_count() == 0 {
+		return none
+	}
+	expr := c.edge(0)
+	if !expr.is_valid() || expr.kind() != .expr_comptime {
+		return none
+	}
+	inner := expr.edge(0)
+	if !inner.is_valid() || inner.kind() != .expr_if {
+		return none
+	}
+	return inner
+}
+
+fn (t &Transformer) can_eval_selected_comptime_if_cursor(c ast.Cursor) bool {
+	if !c.is_valid() || c.kind() != .expr_if {
+		return false
+	}
+	cond := c.edge(0)
+	if !t.can_eval_comptime_cond_cursor(cond) {
+		return false
+	}
+	if t.eval_comptime_cond_cursor(cond) {
+		return true
+	}
+	else_expr := c.edge(1)
+	if !else_expr.is_valid() || else_expr.kind() == .expr_empty {
+		return true
+	}
+	if else_expr.kind() != .expr_if {
+		return true
+	}
+	if expr_cursor_is_empty(else_expr.edge(0)) {
+		return true
+	}
+	return t.can_eval_selected_comptime_if_cursor(else_expr)
+}
+
+fn (mut t Transformer) selected_comptime_if_cursor_stmts_to_flat(c ast.Cursor, mut out ast.FlatBuilder) []ast.FlatNodeId {
+	if !c.is_valid() || c.kind() != .expr_if {
+		return []ast.FlatNodeId{}
+	}
+	if t.eval_comptime_cond_cursor(c.edge(0)) {
+		return t.transform_cursor_stmts_to_flat_direct(ast.CursorList{
+			flat:      c.flat
+			parent_id: c.id
+			offset:    2
+		}, [], mut out)
+	}
+	else_expr := c.edge(1)
+	if !else_expr.is_valid() || else_expr.kind() == .expr_empty {
+		return []ast.FlatNodeId{}
+	}
+	if else_expr.kind() == .expr_if {
+		if expr_cursor_is_empty(else_expr.edge(0)) {
+			return t.transform_cursor_stmts_to_flat_direct(ast.CursorList{
+				flat:      else_expr.flat
+				parent_id: else_expr.id
+				offset:    2
+			}, [], mut out)
+		}
+		return t.selected_comptime_if_cursor_stmts_to_flat(else_expr, mut out)
+	}
+	expr_id := t.transform_expr_cursor_to_flat(else_expr, mut out)
+	return [out.emit_expr_stmt_by_id(expr_id)]
+}
+
 fn (mut t Transformer) transform_label_stmt_cursor_to_flat(c ast.Cursor, mut out ast.FlatBuilder) ast.FlatNodeId {
 	inner_id := t.transform_stmt_cursor_to_flat(c.edge(0), mut out)
 	return out.emit_label_stmt_by_id(c.name(), inner_id)
@@ -5759,10 +5869,11 @@ fn make_exit_one_stmt_to_flat(pos token.Pos, mut out ast.FlatBuilder) ast.FlatNo
 }
 
 fn (mut t Transformer) transform_assign_stmt_cursor_to_flat(c ast.Cursor, mut out ast.FlatBuilder) ast.FlatNodeId {
+	t.remember_decl_assign_cursor_type(c)
 	lhs_len := c.extra_int()
 	mut lhs_ids := []ast.FlatNodeId{cap: lhs_len}
 	for i in 0 .. lhs_len {
-		lhs_ids << t.transform_expr_cursor_to_flat(c.edge(i), mut out)
+		lhs_ids << t.transform_assign_lhs_cursor_to_flat(c.edge(i), mut out)
 	}
 	mut rhs_ids := []ast.FlatNodeId{cap: c.edge_count() - lhs_len}
 	for i in lhs_len .. c.edge_count() {
@@ -5772,6 +5883,162 @@ fn (mut t Transformer) transform_assign_stmt_cursor_to_flat(c ast.Cursor, mut ou
 	return out.emit_assign_stmt_by_ids(op, lhs_ids, rhs_ids, c.pos())
 }
 
+fn (mut t Transformer) transform_assign_lhs_cursor_to_flat(lhs ast.Cursor, mut out ast.FlatBuilder) ast.FlatNodeId {
+	if lhs.kind() == .expr_ident {
+		return out.emit_ident_by_name(lhs.name(), lhs.pos())
+	}
+	return t.transform_expr_cursor_to_flat(lhs, mut out)
+}
+
+fn (mut t Transformer) remember_decl_assign_cursor_type(c ast.Cursor) {
+	if c.kind() != .stmt_assign || unsafe { token.Token(int(c.aux())) } != .decl_assign
+		|| c.extra_int() != 1 || c.edge_count() != 2 {
+		return
+	}
+	lhs := c.edge(0)
+	rhs := c.edge(1)
+	lhs_name := t.get_var_name_cursor(lhs)
+	if lhs_name == '' || lhs_name == '_' {
+		return
+	}
+	if decl_type := t.decl_assign_storage_type_cursor(lhs, rhs) {
+		t.remember_decl_assign_lhs_type_cursor(lhs, decl_type)
+	}
+	if rhs_type := t.fn_pointer_call_return_type_cursor(rhs) {
+		t.register_temp_var(lhs_name, rhs_type)
+	} else if rhs_type := t.smartcast_type_for_expr_cursor(rhs) {
+		t.register_local_var_type(lhs_name, rhs_type)
+	} else if rhs_type := t.rune_arithmetic_expr_type_cursor(rhs) {
+		t.register_local_var_type(lhs_name, rhs_type)
+	} else if rhs.kind() == .expr_array_init {
+		if rhs_type := t.get_array_init_expr_type_cursor(rhs) {
+			t.register_local_var_type(lhs_name, rhs_type)
+		}
+	} else if rhs.kind() == .expr_map_init {
+		typ_cursor := rhs.edge(0)
+		if typ_cursor.is_valid() && typ_cursor.kind() != .expr_empty {
+			if rhs_type := t.type_from_param_type_expr(typ_cursor.type_expr(), []) {
+				t.register_local_var_type(lhs_name, rhs_type)
+			}
+		}
+	} else if rhs.kind() in [.expr_call, .expr_call_or_cast, .expr_init, .expr_ident, .expr_selector] {
+		if rhs_type := t.get_expr_type_cursor(rhs) {
+			t.register_local_var_type(lhs_name, rhs_type)
+		}
+	}
+	if bindings := t.generic_bindings_from_generic_call_expr_cursor(rhs) {
+		t.local_receiver_generic_bindings[lhs_name] = bindings.clone()
+	}
+}
+
+fn (mut t Transformer) remember_decl_assign_lhs_type_cursor(lhs ast.Cursor, typ types.Type) {
+	match lhs.kind() {
+		.expr_ident {
+			if lhs.name() == '_' {
+				return
+			}
+			t.remember_local_decl_type(lhs.name(), typ)
+			t.register_local_var_type(lhs.name(), typ)
+			if lhs.pos().id != 0 {
+				t.register_synth_type(lhs.pos(), typ)
+			}
+		}
+		.expr_modifier {
+			t.remember_decl_assign_lhs_type_cursor(lhs.edge(0), typ)
+		}
+		else {}
+	}
+}
+
+fn (mut t Transformer) transform_map_index_assign_cursor_to_flat(c ast.Cursor, mut out ast.FlatBuilder) ?ast.FlatNodeId {
+	if t.is_eval_backend() || c.kind() != .stmt_assign {
+		return none
+	}
+	lhs_len := c.extra_int()
+	rhs_len := c.edge_count() - lhs_len
+	op := unsafe { token.Token(int(c.aux())) }
+	if op !in [.assign, .decl_assign] || lhs_len != 1 || rhs_len != 1 {
+		return none
+	}
+	lhs := c.edge(0)
+	if lhs.kind() != .expr_index {
+		return none
+	}
+	rhs := c.edge(lhs_len)
+	if t.cursor_subtree_has_or_expr(rhs) || rhs.kind() in [.expr_if, .expr_if_guard] {
+		return none
+	}
+	if rhs.kind() == .expr_comptime && rhs.edge(0).kind() == .expr_if {
+		return none
+	}
+	map_expr := lhs.edge(0)
+	key_expr := lhs.edge(1)
+	map_expr_typ := t.map_index_lhs_type_cursor(map_expr) or { return none }
+	map_type := t.unwrap_map_type(map_expr_typ) or { return none }
+	map_ptr_id := t.map_expr_to_runtime_ptr_cursor(map_expr, map_expr_typ, mut out) or {
+		return none
+	}
+
+	key_ident := t.typed_temp_ident(t.gen_temp_name(), map_type.key_type)
+	key_lhs_id := out.emit_ident_by_name(key_ident.name, key_ident.pos)
+	key_value_id := t.transform_map_key_value_cursor_to_flat(key_expr, map_type.key_type, mut out)
+	key_assign_id := out.emit_assign_stmt_by_ids(.decl_assign, [key_lhs_id], [
+		key_value_id,
+	], key_ident.pos)
+	key_ref_id := out.emit_ident_by_name(key_ident.name, key_ident.pos)
+	key_ptr_id := out.emit_prefix_expr_by_id(.amp, key_ref_id, token.Pos{})
+
+	val_ident := t.typed_temp_ident(t.gen_temp_name(), map_type.value_type)
+	val_lhs_id := out.emit_ident_by_name(val_ident.name, val_ident.pos)
+	val_value_id := t.transform_map_assign_value_cursor_to_flat(rhs, map_type.value_type, mut out)
+	val_assign_id := out.emit_assign_stmt_by_ids(.decl_assign, [val_lhs_id], [
+		val_value_id,
+	], val_ident.pos)
+	val_ref_id := out.emit_ident_by_name(val_ident.name, val_ident.pos)
+	val_ptr_id := out.emit_prefix_expr_by_id(.amp, val_ref_id, token.Pos{})
+
+	call_lhs_id := out.emit_ident_by_name('map__set', token.Pos{})
+	call_id := out.emit_call_expr_by_ids(call_lhs_id, [
+		map_ptr_id,
+		emit_voidptr_cast_id(key_ptr_id, mut out),
+		emit_voidptr_cast_id(val_ptr_id, mut out),
+	], c.pos())
+	call_stmt_id := out.emit_expr_stmt_by_id(call_id)
+	return out.emit_block_stmt_by_ids([key_assign_id, val_assign_id, call_stmt_id])
+}
+
+fn emit_voidptr_cast_id(expr_id ast.FlatNodeId, mut out ast.FlatBuilder) ast.FlatNodeId {
+	typ_id := out.emit_ident_by_name('voidptr', token.Pos{})
+	return out.emit_cast_expr_by_ids(typ_id, expr_id, token.Pos{})
+}
+
+fn (mut t Transformer) transform_map_key_value_cursor_to_flat(c ast.Cursor, key_type types.Type, mut out ast.FlatBuilder) ast.FlatNodeId {
+	enum_type := t.type_to_c_name(t.unwrap_alias_and_pointer_type(key_type))
+	if enum_type != '' {
+		if enum_id := t.enum_shorthand_cursor_to_flat(c, enum_type, mut out) {
+			return enum_id
+		}
+	}
+	return t.transform_expr_cursor_to_flat(c, mut out)
+}
+
+fn (mut t Transformer) transform_map_assign_value_cursor_to_flat(c ast.Cursor, value_type types.Type, mut out ast.FlatBuilder) ast.FlatNodeId {
+	base := t.unwrap_alias_and_pointer_type(value_type)
+	if base is types.Enum {
+		enum_type := t.type_to_c_name(base)
+		if enum_id := t.enum_shorthand_cursor_to_flat(c, enum_type, mut out) {
+			return enum_id
+		}
+	}
+	if base is types.SumType {
+		sumtype_name := t.type_to_c_name(base)
+		if wrapped_id := t.wrap_sumtype_value_cursor_to_flat(c, sumtype_name, mut out) {
+			return wrapped_id
+		}
+	}
+	return t.transform_expr_cursor_to_flat(c, mut out)
+}
+
 fn (t &Transformer) assign_stmt_cursor_needs_legacy_expand(c ast.Cursor) bool {
 	if t.is_native_be {
 		return true
@@ -5779,6 +6046,10 @@ fn (t &Transformer) assign_stmt_cursor_needs_legacy_expand(c ast.Cursor) bool {
 	lhs_len := c.extra_int()
 	rhs_len := c.edge_count() - lhs_len
 	if lhs_len != 1 || rhs_len != 1 {
+		return true
+	}
+	lhs := c.edge(0)
+	if t.assign_lhs_cursor_needs_legacy_rewrite(lhs) {
 		return true
 	}
 	rhs := c.edge(lhs_len)
@@ -6514,6 +6785,9 @@ fn (mut t Transformer) transform_stmt_cursor_to_flat(c ast.Cursor, mut out ast.F
 			return out.emit_assert_stmt_by_id(expr_id)
 		}
 		.stmt_assign {
+			if id := t.transform_map_index_assign_cursor_to_flat(c, mut out) {
+				return id
+			}
 			if t.assign_stmt_cursor_needs_legacy_expand(c) {
 				return t.transform_stmt_to_flat(assign_stmt_from_cursor(c), mut out)
 			}
@@ -6523,6 +6797,12 @@ fn (mut t Transformer) transform_stmt_cursor_to_flat(c ast.Cursor, mut out ast.F
 			return t.transform_comptime_stmt_cursor_to_flat(c, mut out)
 		}
 		.stmt_expr {
+			if id := t.transform_comptime_if_stmt_cursor_to_flat(c, mut out) {
+				return id
+			}
+			if id := t.transform_flag_enum_set_clear_cursor_to_flat(c, mut out) {
+				return id
+			}
 			if t.expr_stmt_cursor_needs_legacy_expand(c) {
 				return t.transform_stmt_to_flat(expr_stmt_from_cursor(c), mut out)
 			}
@@ -8468,6 +8748,99 @@ pub fn (mut t Transformer) try_emit_flag_enum_set_clear_to_flat(stmt ast.ExprStm
 	flag_stmt := t.try_transform_flag_enum_set_clear(stmt) or { return false }
 	ids << out.emit_stmt(flag_stmt)
 	return true
+}
+
+fn (mut t Transformer) transform_flag_enum_set_clear_cursor_to_flat(stmt ast.Cursor, mut out ast.FlatBuilder) ?ast.FlatNodeId {
+	if !stmt.is_valid() || stmt.kind() != .stmt_expr || stmt.edge_count() == 0 {
+		return none
+	}
+	expr := stmt.edge(0)
+	mut receiver := ast.Cursor{}
+	mut arg := ast.Cursor{}
+	mut method_name := ''
+	match expr.kind() {
+		.expr_call {
+			if expr.edge_count() == 2 {
+				lhs := expr.edge(0)
+				if lhs.kind() != .expr_selector {
+					return none
+				}
+				method_name = selector_rhs_name_cursor(lhs)
+				receiver = lhs.edge(0)
+				arg = expr.edge(1)
+			} else if expr.edge_count() == 3 {
+				lhs := expr.edge(0)
+				if lhs.kind() != .expr_ident {
+					return none
+				}
+				name := lhs.name()
+				if name.ends_with('__set') {
+					method_name = 'set'
+				} else if name.ends_with('__clear') {
+					method_name = 'clear'
+				} else {
+					return none
+				}
+				receiver = expr.edge(1)
+				arg = expr.edge(2)
+			} else {
+				return none
+			}
+		}
+		.expr_call_or_cast {
+			if expr.edge_count() < 2 {
+				return none
+			}
+			lhs := expr.edge(0)
+			if lhs.kind() != .expr_selector || t.call_or_cast_lhs_is_type_cursor(lhs) {
+				return none
+			}
+			method_name = selector_rhs_name_cursor(lhs)
+			receiver = lhs.edge(0)
+			arg = expr.edge(1)
+		}
+		else {
+			return none
+		}
+	}
+
+	if method_name !in ['set', 'clear'] || !receiver.is_valid() || !arg.is_valid() {
+		return none
+	}
+	enum_type := t.get_enum_type_name_cursor(receiver)
+	if enum_type == '' || !t.is_flag_enum(enum_type) {
+		return none
+	}
+	lhs_id := t.transform_expr_cursor_to_flat(receiver, mut out)
+	arg_id := t.transform_flag_enum_arg_cursor_to_flat(arg, enum_type, mut out)
+	rhs_id := if method_name == 'clear' {
+		out.emit_prefix_expr_by_id(.bit_not, arg_id, token.Pos{})
+	} else {
+		arg_id
+	}
+	op := if method_name == 'set' { token.Token.or_assign } else { token.Token.and_assign }
+	return out.emit_assign_stmt_by_ids(op, [lhs_id], [rhs_id], expr.pos())
+}
+
+fn (mut t Transformer) transform_flag_enum_arg_cursor_to_flat(arg ast.Cursor, enum_type string, mut out ast.FlatBuilder) ast.FlatNodeId {
+	if id := t.enum_shorthand_cursor_to_flat(arg, enum_type, mut out) {
+		return id
+	}
+	match arg.kind() {
+		.expr_infix {
+			op := unsafe { token.Token(int(arg.aux())) }
+			lhs_id := t.transform_flag_enum_arg_cursor_to_flat(arg.edge(0), enum_type, mut out)
+			rhs_id := t.transform_flag_enum_arg_cursor_to_flat(arg.edge(1), enum_type, mut out)
+			return out.emit_infix_expr_by_ids(op, lhs_id, rhs_id, arg.pos())
+		}
+		.expr_paren {
+			inner_id := t.transform_flag_enum_arg_cursor_to_flat(arg.edge(0), enum_type, mut out)
+			return out.emit_paren_expr_by_id(inner_id, arg.pos())
+		}
+		else {
+			return t.transform_expr_cursor_to_flat(arg, mut out)
+		}
+	}
 }
 
 // try_emit_map_index_push_to_flat is the flat-direct mirror of the
