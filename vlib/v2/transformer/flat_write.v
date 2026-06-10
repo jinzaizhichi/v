@@ -4212,7 +4212,7 @@ fn (mut t Transformer) transform_expr_cursor_to_flat(c ast.Cursor, mut out ast.F
 				rhs_id := t.transform_expr_cursor_to_flat(c.edge(1), mut out)
 				return out.emit_infix_expr_by_ids(op, lhs_id, rhs_id, t.infix_cursor_result_pos(c))
 			}
-			t.count_flat_fallback('expr_infix')
+			t.count_flat_fallback('expr_infix/op=${op}')
 			result := t.transform_infix_expr(infix_expr_from_cursor(c))
 			return t.emit_lowered_expr_result_to_flat(result, mut out)
 		}
